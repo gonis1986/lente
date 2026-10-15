@@ -16,6 +16,9 @@
     <string name="banner_translate">Traduci</string>
     <string name="banner_lock">Lucchetto</string>
     <string name="banner_close">Chiudi</string>
+    <string name="hint_scanning">Analisi del testo…</string>
+    <string name="hint_tap_or_drag">Tocca una parola o trascina per selezionare</string>
+    <string name="status_scanning">Analisi in corso…</string>
     <string name="hint_drag">Trascina un rettangolo sul testo</string>
     <string name="status_working">Traduzione in corso…</string>
     <string name="status_downloading">Scarico il modello di lingua…</string>

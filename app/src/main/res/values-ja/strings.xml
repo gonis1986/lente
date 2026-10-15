@@ -16,6 +16,9 @@
     <string name="banner_translate">翻訳</string>
     <string name="banner_lock">ロック</string>
     <string name="banner_close">閉じる</string>
+    <string name="hint_scanning">テキストを解析中…</string>
+    <string name="hint_tap_or_drag">文字をタップまたはドラッグして選択</string>
+    <string name="status_scanning">解析中…</string>
     <string name="hint_drag">テキストの上で四角をドラッグ</string>
     <string name="status_working">翻訳中…</string>
     <string name="status_downloading">言語モデルをダウンロード中…</string>

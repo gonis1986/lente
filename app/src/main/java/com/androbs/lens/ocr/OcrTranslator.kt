@@ -68,9 +68,15 @@ class OcrTranslator {
         blocks: List<Text.TextBlock>,
         scriptHint: String,
         sourcePref: String
+    ): String = detectSourceTexts(blocks.map { it.text }, scriptHint, sourcePref)
+
+    suspend fun detectSourceTexts(
+        texts: List<String>,
+        scriptHint: String,
+        sourcePref: String
     ): String {
         if (sourcePref != "auto") return sourcePref
-        val sample = blocks.joinToString(" ") { it.text }.replace('\n', ' ').take(250)
+        val sample = texts.joinToString(" ").replace('\n', ' ').take(250)
         val detected = if (sample.isBlank()) null else try {
             langId.identifyLanguage(sample).await()
         } catch (e: Exception) {
@@ -141,22 +147,33 @@ class OcrTranslator {
         val usable = blocks.filter { it.boundingBox != null && it.text.isNotBlank() }
         if (usable.isEmpty()) return emptyList()
 
-        return usable.map { block ->
+        val boxes = usable.map { block ->
             // Clean text: join wrapped lines into clean sentence
             val cleanText = block.text.lines()
                 .map { it.trim() }
                 .filter { it.isNotEmpty() }
                 .joinToString(if (sourceLang == "ja") "" else " ")
+            TextBox(block.boundingBox!!, cleanText, null)
+        }
+        return translateBoxes(boxes, sourceLang, targetLang)
+    }
 
+    /** Translates the `original` text of each box, preserving rects. */
+    suspend fun translateBoxes(
+        boxes: List<TextBox>,
+        sourceLang: String,
+        targetLang: String
+    ): List<TextBox> {
+        return boxes.map { box ->
             val translated = if (sourceLang == targetLang) {
-                cleanText
+                box.original
             } else {
                 // Try Google Online first (natural sentence translate), fallback to offline
-                translateGoogleOnline(cleanText, sourceLang, targetLang)
-                    ?: translateOfflineMlKit(cleanText, sourceLang, targetLang)
-                    ?: cleanText
+                translateGoogleOnline(box.original, sourceLang, targetLang)
+                    ?: translateOfflineMlKit(box.original, sourceLang, targetLang)
+                    ?: box.original
             }
-            TextBox(block.boundingBox!!, cleanText, translated)
+            box.copy(translated = translated)
         }
     }
 }

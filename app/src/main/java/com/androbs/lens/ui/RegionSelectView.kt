@@ -24,6 +24,9 @@ class RegionSelectView @JvmOverloads constructor(
 
     var onSelected: ((RectF) -> Unit)? = null
 
+    /** Called on a tap (touch released without dragging). Coordinates are view coords. */
+    var onTap: ((Float, Float) -> Unit)? = null
+
     private val sel = RectF()
     private var downX = 0f
     private var downY = 0f
@@ -65,6 +68,8 @@ class RegionSelectView @JvmOverloads constructor(
                     invalidate()
                     if (result.width() > 12 && result.height() > 12) {
                         onSelected?.invoke(result)
+                    } else {
+                        onTap?.invoke(event.x, event.y)
                     }
                 }
                 return true

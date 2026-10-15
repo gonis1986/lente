@@ -28,6 +28,8 @@ class TranslationLayerView @JvmOverloads constructor(
     data class Box(val rect: RectF, val text: String, val bg: Int, val fg: Int)
 
     private var boxes: List<Box> = emptyList()
+    private var highlights: List<RectF> = emptyList()
+    private var selection: List<RectF> = emptyList()
     private var srcW = 0
     private var srcH = 0
 
@@ -39,6 +41,19 @@ class TranslationLayerView @JvmOverloads constructor(
         strokeWidth = 3f
         color = Color.parseColor("#4B5563")
     }
+    private val highlightPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = 0x2E38BDF8
+    }
+    private val selectionFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = 0x5938BDF8
+    }
+    private val selectionStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 4f
+        color = 0xFF38BDF8.toInt()
+    }
 
     fun setContent(sourceWidth: Int, sourceHeight: Int, newBoxes: List<Box>) {
         srcW = sourceWidth
@@ -47,15 +62,48 @@ class TranslationLayerView @JvmOverloads constructor(
         invalidate()
     }
 
+    /** Faint pills over every detected text region (source coordinates). */
+    fun setHighlights(sourceWidth: Int, sourceHeight: Int, rects: List<RectF>) {
+        srcW = sourceWidth
+        srcH = sourceHeight
+        highlights = rects
+        invalidate()
+    }
+
+    /** Strong pills over the currently selected regions (source coordinates). */
+    fun setSelection(rects: List<RectF>) {
+        selection = rects
+        invalidate()
+    }
+
     fun clear() {
         boxes = emptyList()
         invalidate()
     }
 
+    fun clearAll() {
+        boxes = emptyList()
+        highlights = emptyList()
+        selection = emptyList()
+        invalidate()
+    }
+
     override fun onDraw(canvas: Canvas) {
-        if (boxes.isEmpty() || srcW <= 0 || srcH <= 0) return
+        if (srcW <= 0 || srcH <= 0) return
         val m = FitTransform.matrix(width, height, srcW, srcH)
         val dst = RectF()
+
+        for (r in highlights) {
+            m.mapRect(dst, r)
+            dst.inset(-4f, -2f)
+            canvas.drawRoundRect(dst, 10f, 10f, highlightPaint)
+        }
+        for (r in selection) {
+            m.mapRect(dst, r)
+            dst.inset(-6f, -4f)
+            canvas.drawRoundRect(dst, 12f, 12f, selectionFillPaint)
+            canvas.drawRoundRect(dst, 12f, 12f, selectionStrokePaint)
+        }
 
         for (box in boxes) {
             m.mapRect(dst, box.rect)

@@ -20,38 +20,43 @@ import com.androbs.lens.Prefs
 import com.androbs.lens.R
 import com.androbs.lens.a11y.LensAccessibilityService
 import com.androbs.lens.ocr.OcrTranslator
+import com.androbs.lens.ui.FitTransform
 import com.androbs.lens.ui.RegionSelectView
 import com.androbs.lens.ui.ScreenshotView
 import com.androbs.lens.ui.TranslationLayerView
-import com.google.mlkit.vision.text.Text
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.URLEncoder
-import kotlin.math.max
-import kotlin.math.min
 
 /**
  * The overlay shown when the user invokes the assistant (long-press Home or
- * corner swipe): captured screen + banner with search / translate / lock.
+ * corner swipe). Works like Circle to Search: the captured screen is shown
+ * dimmed, every detected text block is highlighted with a tappable pill, and
+ * the user can tap a word or drag a rectangle to select text — then Search,
+ * Copy or Translate it. The banner's Search/Translate act on the selection,
+ * or on the whole screen when nothing is selected.
  */
 class LensSession(context: Context) : VoiceInteractionSession(context) {
-
-    private enum class Mode { IDLE, SELECT_SEARCH, SELECT_TRANSLATE }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val ocr = OcrTranslator()
 
-    private var mode = Mode.IDLE
-    private var screenshot: Bitmap? = null
     private var view: View? = null
     private var pendingBitmap: Bitmap? = null
-    private var lastRegionBitmap: Bitmap? = null
-    private var lastBlocks: List<Text.TextBlock> = emptyList()
-    private var lastBlocksOffset = Rect(0, 0, 0, 0)
+    private var ocrJob: Job? = null
+
+    /** Every text block found on the captured screen, in bitmap coordinates. */
+    private var allBoxes: List<OcrTranslator.TextBox> = emptyList()
+
+    /** Blocks the user tapped/drag-selected, in bitmap coordinates. */
+    private var selectedBoxes: List<OcrTranslator.TextBox> = emptyList()
+    private var scriptHint = "latin"
+    private var ocrDone = false
 
     private val shotView get() = view?.findViewById<ScreenshotView>(R.id.screenshot)
     private val translations get() = view?.findViewById<TranslationLayerView>(R.id.translations)
@@ -78,12 +83,10 @@ class LensSession(context: Context) : VoiceInteractionSession(context) {
         }
         wire(v)
         pendingBitmap?.let {
-            shotView?.setBitmap(argb(it))
+            val b = argb(it)
             pendingBitmap = null
-        }
-        if (shotView?.bitmap() == null && pendingBitmap == null) {
-            // Screenshot may still arrive via onHandleScreenshot; wait for it.
-            status?.visibility = View.GONE
+            shotView?.setBitmap(b)
+            analyzeScreen(b)
         }
     }
 
@@ -100,7 +103,12 @@ class LensSession(context: Context) : VoiceInteractionSession(context) {
         }
         val b = argb(bitmap)
         val sv = shotView
-        if (sv == null) pendingBitmap = b else sv.setBitmap(b)
+        if (sv == null) {
+            pendingBitmap = b
+        } else {
+            sv.setBitmap(b)
+            analyzeScreen(b)
+        }
     }
 
     override fun onComputeInsets(insets: Insets) {
@@ -129,25 +137,15 @@ class LensSession(context: Context) : VoiceInteractionSession(context) {
         } else b
 
     private fun wire(v: View) {
-        v.findViewById<Button>(R.id.btnSearch).setOnClickListener { enterMode(Mode.SELECT_SEARCH) }
-        v.findViewById<Button>(R.id.btnTranslate).setOnClickListener { enterMode(Mode.SELECT_TRANSLATE) }
+        v.findViewById<Button>(R.id.btnSearch).setOnClickListener { onSearchClicked() }
+        v.findViewById<Button>(R.id.btnTranslate).setOnClickListener { onTranslateClicked() }
         v.findViewById<Button>(R.id.btnClose).setOnClickListener { finish() }
         v.findViewById<Button>(R.id.btnLock).setOnClickListener { onLockClicked() }
         selector?.onSelected = { rect -> onRegionSelected(rect) }
+        selector?.onTap = { x, y -> onTap(x, y) }
         v.findViewById<Button>(R.id.btnGoogle).setOnClickListener { searchTextOnGoogle() }
         v.findViewById<Button>(R.id.btnCopy).setOnClickListener { copyResultText() }
-        v.findViewById<Button>(R.id.btnTranslateResult).setOnClickListener { translateLastOcr() }
-    }
-
-    private fun enterMode(m: Mode) {
-        if (shotView?.bitmap() == null) {
-            showStatus(getStringCtx(R.string.status_no_screenshot), sticky = true)
-            return
-        }
-        mode = m
-        selector?.selectionEnabled = true
-        resultCard?.visibility = View.GONE
-        hint?.visibility = View.VISIBLE
+        v.findViewById<Button>(R.id.btnTranslateResult).setOnClickListener { translateSelection() }
     }
 
     private fun getStringCtx(id: Int) = context.getString(id)
@@ -159,6 +157,48 @@ class LensSession(context: Context) : VoiceInteractionSession(context) {
         }
         if (!sticky) {
             view?.postDelayed({ if (status?.text == msg) status?.visibility = View.GONE }, 4000)
+        }
+    }
+
+    /** OCRs the whole captured screen in the background and highlights every block. */
+    private fun analyzeScreen(bmp: Bitmap) {
+        ocrJob?.cancel()
+        ocrDone = false
+        allBoxes = emptyList()
+        selectedBoxes = emptyList()
+        selector?.selectionEnabled = true
+        hint?.apply {
+            setText(R.string.hint_scanning)
+            visibility = View.VISIBLE
+        }
+        ocrJob = scope.launch(Dispatchers.Default) {
+            try {
+                val (blocks, script) = ocr.ocr(bmp, Prefs.sourceLang(context))
+                scriptHint = script
+                val boxes = blocks.mapNotNull { block ->
+                    val r = block.boundingBox ?: return@mapNotNull null
+                    if (block.text.isBlank()) return@mapNotNull null
+                    OcrTranslator.TextBox(r, block.text.trim(), null)
+                }
+                allBoxes = boxes
+                ocrDone = true
+                withContext(Dispatchers.Main) {
+                    translations?.setHighlights(
+                        bmp.width, bmp.height, boxes.map { RectF(it.rect) }
+                    )
+                    hint?.apply {
+                        setText(
+                            if (boxes.isEmpty()) R.string.hint_drag
+                            else R.string.hint_tap_or_drag
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    hint?.setText(R.string.hint_drag)
+                    showStatus(context.getString(R.string.status_error, e.message ?: "?"))
+                }
+            }
         }
     }
 
@@ -178,61 +218,146 @@ class LensSession(context: Context) : VoiceInteractionSession(context) {
         finish()
     }
 
-    private fun onRegionSelected(viewRect: RectF) {
-        val bmp = shotView?.bitmap() ?: return
-        val sv = shotView ?: return
-        selector?.selectionEnabled = false
-        hint?.visibility = View.GONE
-        val m = com.androbs.lens.ui.FitTransform.matrix(sv.width, sv.height, bmp.width, bmp.height)
+    private fun viewToBitmap(): android.graphics.Matrix? {
+        val bmp = shotView?.bitmap() ?: return null
+        val sv = shotView ?: return null
+        val m = FitTransform.matrix(sv.width, sv.height, bmp.width, bmp.height)
         val inv = android.graphics.Matrix()
         m.invert(inv)
+        return inv
+    }
+
+    /** Tap on the frozen screen: pick the smallest detected block under the finger. */
+    private fun onTap(x: Float, y: Float) {
+        val bmp = shotView?.bitmap() ?: return
+        val inv = viewToBitmap() ?: return
+        val pt = floatArrayOf(x, y)
+        inv.mapPoints(pt)
+        val bx = pt[0]
+        val by = pt[1]
+
+        val hit = allBoxes
+            .filter { it.rect.contains(bx.toInt(), by.toInt()) }
+            .minByOrNull { it.rect.width() * it.rect.height() }
+            ?: allBoxes
+                .filter { inflated(it.rect, 24f).contains(bx, by) }
+                .minByOrNull { it.rect.width() * it.rect.height() }
+
+        if (hit == null) {
+            // Tapped empty space: clear any selection.
+            selectedBoxes = emptyList()
+            translations?.setSelection(emptyList())
+            resultCard?.visibility = View.GONE
+            return
+        }
+        selectBoxes(listOf(hit))
+    }
+
+    private fun inflated(r: Rect, d: Float) =
+        RectF(r.left - d, r.top - d, r.right + d, r.bottom + d)
+
+    /** Drag-select: every detected block intersecting the rect; OCR the crop as fallback. */
+    private fun onRegionSelected(viewRect: RectF) {
+        val bmp = shotView?.bitmap() ?: return
+        val inv = viewToBitmap() ?: return
         val bmpRectF = RectF()
         inv.mapRect(bmpRectF, viewRect)
         val r = Rect(
-            max(0, bmpRectF.left.toInt()),
-            max(0, bmpRectF.top.toInt()),
-            min(bmp.width, bmpRectF.right.toInt() + 1),
-            min(bmp.height, bmpRectF.bottom.toInt() + 1)
+            maxOf(0, bmpRectF.left.toInt()),
+            maxOf(0, bmpRectF.top.toInt()),
+            minOf(bmp.width, bmpRectF.right.toInt() + 1),
+            minOf(bmp.height, bmpRectF.bottom.toInt() + 1)
         )
         if (r.width() < 8 || r.height() < 8) return
-        val crop = Bitmap.createBitmap(bmp, r.left, r.top, r.width(), r.height())
-        when (mode) {
-            Mode.SELECT_SEARCH -> runOcr(crop, r, forSearch = true)
-            Mode.SELECT_TRANSLATE -> runOcr(crop, r, forSearch = false)
-            Mode.IDLE -> Unit
+
+        val inside = allBoxes.filter { RectF.intersects(RectF(it.rect), bmpRectF) }
+        if (inside.isNotEmpty()) {
+            selectBoxes(inside)
+        } else {
+            // Region missed by the full-screen OCR: run OCR on the crop.
+            runOcrFallback(Bitmap.createBitmap(bmp, r.left, r.top, r.width(), r.height()), r)
         }
-        mode = Mode.IDLE
     }
 
-    private fun runOcr(crop: Bitmap, offset: Rect, forSearch: Boolean) {
+    private fun runOcrFallback(crop: Bitmap, offset: Rect) {
         showStatus(getStringCtx(R.string.status_working), sticky = true)
         scope.launch(Dispatchers.Default) {
             try {
                 val (blocks, script) = ocr.ocr(crop, Prefs.sourceLang(context))
-                android.util.Log.i("Lente", "runOcr blocks=" + blocks.size)
-                if (blocks.isEmpty()) {
-                    withContext(Dispatchers.Main) {
-                        showStatus(getStringCtx(R.string.status_no_text))
-                    }
-                    return@launch
+                if (script == "ja") scriptHint = "ja"
+                val boxes = blocks.mapNotNull { block ->
+                    val r = block.boundingBox ?: return@mapNotNull null
+                    if (block.text.isBlank()) return@mapNotNull null
+                    OcrTranslator.TextBox(
+                        Rect(r).apply { offset(offset.left, offset.top) },
+                        block.text.trim(), null
+                    )
                 }
-                lastRegionBitmap = crop
-                lastBlocks = blocks
-                lastBlocksOffset = offset
-                if (forSearch) {
-                    val text = blocks.joinToString(" ") { it.text }.replace('\n', ' ').trim()
-                    withContext(Dispatchers.Main) { showResultCard(text) }
-                } else {
-                    withContext(Dispatchers.Main) {
-                        showStatus(getStringCtx(R.string.status_working), sticky = true)
+                withContext(Dispatchers.Main) {
+                    showStatus(null)
+                    if (boxes.isEmpty()) {
+                        showStatus(getStringCtx(R.string.status_no_text))
+                    } else {
+                        selectBoxes(boxes)
                     }
-                    translateAndRender(blocks, offset, crop)
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     showStatus(context.getString(R.string.status_error, e.message ?: "?"))
                 }
             }
+        }
+    }
+
+    private fun selectBoxes(boxes: List<OcrTranslator.TextBox>) {
+        selectedBoxes = boxes
+        translations?.setSelection(boxes.map { RectF(it.rect) })
+        showResultCard(joinedText(boxes))
+    }
+
+    private fun joinedText(boxes: List<OcrTranslator.TextBox>): String =
+        boxes.joinToString(" ") { it.original }.replace('\n', ' ').trim()
+
+    /** Banner "Cerca": search the selected text, or everything on screen. */
+    private fun onSearchClicked() {
+        val text = when {
+            selectedBoxes.isNotEmpty() -> joinedText(selectedBoxes)
+            allBoxes.isNotEmpty() -> joinedText(allBoxes)
+            else -> {
+                if (shotView?.bitmap() == null) {
+                    showStatus(getStringCtx(R.string.status_no_screenshot), sticky = true)
+                } else if (ocrDone) {
+                    showStatus(getStringCtx(R.string.status_no_text))
+                } else {
+                    showStatus(getStringCtx(R.string.status_scanning))
+                }
+                return
+            }
+        }
+        showResultCard(text)
+        openGoogleSearch(text)
+    }
+
+    /** Banner "Traduci": translate the selection, or the whole screen. */
+    private fun onTranslateClicked() {
+        val bmp = shotView?.bitmap()
+        if (bmp == null) {
+            showStatus(getStringCtx(R.string.status_no_screenshot), sticky = true)
+            return
+        }
+        val targets = selectedBoxes.ifEmpty { allBoxes }
+        if (targets.isEmpty()) {
+            showStatus(
+                getStringCtx(
+                    if (ocrDone) R.string.status_no_text else R.string.status_scanning
+                )
+            )
+            return
+        }
+        resultCard?.visibility = View.GONE
+        showStatus(getStringCtx(R.string.status_working), sticky = true)
+        scope.launch(Dispatchers.Default) {
+            translateAndRender(targets, bmp)
         }
     }
 
@@ -245,6 +370,10 @@ class LensSession(context: Context) : VoiceInteractionSession(context) {
 
     private fun searchTextOnGoogle() {
         val text = resultCard?.findViewById<TextView>(R.id.resultText)?.text?.toString() ?: return
+        openGoogleSearch(text)
+    }
+
+    private fun openGoogleSearch(text: String) {
         val url = "https://www.google.com/search?q=" + URLEncoder.encode(text, "UTF-8")
         try {
             startAssistantActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
@@ -260,40 +389,40 @@ class LensSession(context: Context) : VoiceInteractionSession(context) {
         showStatus(getStringCtx(R.string.result_copied))
     }
 
-    private fun translateLastOcr() {
-        val crop = lastRegionBitmap ?: return
-        if (lastBlocks.isEmpty()) return
+    /** "Translate this text" on the result card: translate the current selection. */
+    private fun translateSelection() {
+        val bmp = shotView?.bitmap() ?: return
+        if (selectedBoxes.isEmpty()) return
         resultCard?.visibility = View.GONE
         showStatus(getStringCtx(R.string.status_working), sticky = true)
         scope.launch(Dispatchers.Default) {
-            translateAndRender(lastBlocks, lastBlocksOffset, crop)
+            translateAndRender(selectedBoxes, bmp)
         }
     }
 
     private suspend fun translateAndRender(
-        blocks: List<Text.TextBlock>,
-        offset: Rect,
-        crop: Bitmap
+        boxes: List<OcrTranslator.TextBox>,
+        bmp: Bitmap
     ) {
         try {
-            val src = ocr.detectSource(blocks, "ja", Prefs.sourceLang(context))
+            val src = ocr.detectSourceTexts(
+                boxes.map { it.original }, scriptHint, Prefs.sourceLang(context)
+            )
             val dst = Prefs.targetLang(context)
-            val boxes = ocr.translateBlocks(blocks, src, dst)
-            val full = shotView?.bitmap()
-            val rendered = boxes.mapNotNull { box ->
-                val translated = box.translated ?: return@mapNotNull null
-                val shifted = Rect(box.rect).apply { offset(offset.left, offset.top) }
-                val (bg, fg) = if (full != null) {
-                    TranslationLayerView.estimateColors(full, shifted)
-                } else {
-                    android.graphics.Color.WHITE to android.graphics.Color.BLACK
-                }
-                TranslationLayerView.Box(RectF(shifted), translated, bg, fg)
+            val translated = ocr.translateBoxes(boxes, src, dst)
+            val rendered = translated.mapNotNull { box ->
+                val t = box.translated?.trim() ?: return@mapNotNull null
+                if (t.isEmpty()) return@mapNotNull null
+                TranslationLayerView.Box(
+                    RectF(box.rect), t,
+                    android.graphics.Color.parseColor("#EE111827"),
+                    android.graphics.Color.WHITE
+                )
             }
             android.util.Log.i("Lente", "rendered boxes=" + rendered.size)
             withContext(Dispatchers.Main) {
                 showStatus(null)
-                full?.let { translations?.setContent(it.width, it.height, rendered) }
+                translations?.setContent(bmp.width, bmp.height, rendered)
             }
         } catch (e: Exception) {
             withContext(Dispatchers.Main) {

@@ -16,6 +16,9 @@
     <string name="banner_translate">Translate</string>
     <string name="banner_lock">Lock</string>
     <string name="banner_close">Close</string>
+    <string name="hint_scanning">Scanning text…</string>
+    <string name="hint_tap_or_drag">Tap a word or drag to select text</string>
+    <string name="status_scanning">Scanning…</string>
     <string name="hint_drag">Drag a rectangle over the text</string>
     <string name="status_working">Translating…</string>
     <string name="status_downloading">Downloading language model…</string>

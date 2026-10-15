@@ -23,9 +23,11 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="bottom"
-        android:layout_margin="12dp"
+        android:layout_marginLeft="12dp"
+        android:layout_marginRight="12dp"
+        android:layout_marginBottom="104dp"
         android:orientation="vertical"
-        android:background="#E6222222"
+        android:background="@drawable/card_bg"
         android:padding="16dp"
         android:visibility="gone">
 
@@ -100,7 +102,7 @@
         android:layout_height="wrap_content"
         android:layout_gravity="bottom"
         android:layout_margin="12dp"
-        android:background="#E6161616"
+        android:background="@drawable/banner_bg"
         android:gravity="center"
         android:orientation="horizontal"
         android:padding="10dp">

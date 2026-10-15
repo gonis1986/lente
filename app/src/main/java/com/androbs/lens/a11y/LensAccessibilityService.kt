@@ -383,7 +383,7 @@ class LensAccessibilityService : AccessibilityService() {
         val scroll = ScrollView(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                800
+                (resources.displayMetrics.heightPixels * 0.45f).toInt()
             )
         }
         val contentLayout = LinearLayout(this).apply {
