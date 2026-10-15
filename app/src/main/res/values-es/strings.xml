@@ -11,6 +11,9 @@
     <string name="hint_trigger">Luego mantén pulsado Home (o desliza desde una esquina) en cualquier app: el banner de Lente aparece sin salir de la app.</string>
     <string name="label_source_lang">Traducir de</string>
     <string name="label_target_lang">Traducir a</string>
+    <string name="btn_download_model">Descargar modelo de traducción sin conexión</string>
+    <string name="offline_model_ready">Modelo de traducción sin conexión listo.</string>
+    <string name="offline_model_unavailable">Elige idiomas de origen y destino distintos para descargar un modelo.</string>
     <string name="lang_auto">Automático</string>
     <string name="banner_search">Buscar en pantalla</string>
     <string name="banner_translate">Traducir</string>
@@ -28,7 +31,7 @@
     <string name="result_search_google">Buscar en Google</string>
     <string name="result_copy">Copiar</string>
     <string name="result_copied">Copiado</string>
-    <string name="result_translate_it">Traducir este texto</string>
+    <string name="result_translate_it">Traducir selección</string>
     <string name="lock_enable_first">Activa primero \"Traducción al desplazar\" en la app Lente</string>
     <string name="lock_active">Bloqueo activo: traduciendo mientras te desplazas</string>
     <string name="lock_pause">Pausar</string>
@@ -44,6 +47,7 @@
     <string name="open_google_lens">Abrir con Google Lens</string>
     <string name="error_google_lens">No se pudo abrir Google Lens: %1$s</string>
     <string name="controller_lens">Abrir Google Lens</string>
+    <string name="controller_menu">Abrir controles de traducción</string>
     <string name="controller_translate">Traducir pantalla</string>
     <string name="controller_reader">Abrir lector de traducción</string>
 </resources>

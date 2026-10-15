@@ -77,6 +77,19 @@
             android:layout_height="wrap_content"
             android:paddingTop="4dp" />
 
+        <Button
+            android:id="@+id/btnDownloadModel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/btn_download_model" />
+
+        <TextView
+            android:id="@+id/offlineModelStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:visibility="gone" />
+
         <com.google.android.material.switchmaterial.SwitchMaterial
             android:id="@+id/switchAutoTranslate"
             android:layout_width="match_parent"

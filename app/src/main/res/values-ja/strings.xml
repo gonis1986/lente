@@ -11,6 +11,9 @@
     <string name="hint_trigger">その後、どのアプリでもホームボタン長押し（または角からスワイプ）で、アプリを離れずにLenteバナーが表示されます。</string>
     <string name="label_source_lang">翻訳元</string>
     <string name="label_target_lang">翻訳先</string>
+    <string name="btn_download_model">オフライン翻訳モデルをダウンロード</string>
+    <string name="offline_model_ready">オフライン翻訳モデルの準備ができました。</string>
+    <string name="offline_model_unavailable">翻訳元と翻訳先に異なる言語を選んでください。</string>
     <string name="lang_auto">自動</string>
     <string name="banner_search">画面を検索</string>
     <string name="banner_translate">翻訳</string>
@@ -28,7 +31,7 @@
     <string name="result_search_google">Googleで検索</string>
     <string name="result_copy">コピー</string>
     <string name="result_copied">コピーしました</string>
-    <string name="result_translate_it">このテキストを翻訳</string>
+    <string name="result_translate_it">選択範囲を翻訳</string>
     <string name="lock_enable_first">先にLenteアプリで「スクロール翻訳」を有効にしてください</string>
     <string name="lock_active">ロック中: スクロールしながら翻訳します</string>
     <string name="lock_pause">一時停止</string>
@@ -44,6 +47,7 @@
     <string name="open_google_lens">Google レンズで開く</string>
     <string name="error_google_lens">Google レンズを開けませんでした: %1$s</string>
     <string name="controller_lens">Google レンズを開く</string>
+    <string name="controller_menu">翻訳コントロールを開く</string>
     <string name="controller_translate">画面を翻訳</string>
     <string name="controller_reader">翻訳リーダーを開く</string>
 </resources>

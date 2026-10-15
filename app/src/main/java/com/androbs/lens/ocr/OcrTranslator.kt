@@ -47,7 +47,8 @@ class OcrTranslator {
         var bgColor: Int = Color.WHITE,
         var textColor: Int = Color.BLACK,
         var strokeHaloColor: Int = Color.WHITE,
-        var widenVertically: Boolean = false
+        val eraseRects: List<RectF> = lineRects,
+        var writingRect: RectF? = null
     )
 
     private val latin by lazy {
@@ -62,7 +63,6 @@ class OcrTranslator {
         )
     }
     private val offlineTranslators = HashMap<String, Translator>()
-    private val unavailableOfflineModels = HashSet<String>()
     private val translationCache = LruCache<String, String>(500)
 
     /** Returns OCR blocks and script hint. */
@@ -116,17 +116,28 @@ class OcrTranslator {
      */
     private suspend fun translateGoogleOnline(text: String, source: String, target: String): String? {
         return withContext(Dispatchers.IO) {
+            var conn: HttpURLConnection? = null
             try {
                 val sl = if (source == "auto" || source.isBlank()) "auto" else source
                 val tl = if (target.isBlank()) "it" else target
                 val encoded = URLEncoder.encode(text, "UTF-8")
                 val url = URL("https://translate.googleapis.com/translate_a/single?client=gtx&sl=$sl&tl=$tl&dt=t&q=$encoded")
-                val conn = (url.openConnection() as HttpURLConnection).apply {
+                val connection = (url.openConnection() as HttpURLConnection).apply {
                     connectTimeout = 4000
                     readTimeout = 4000
                     setRequestProperty("User-Agent", "Mozilla/5.0")
                 }
-                val res = conn.inputStream.bufferedReader().use { it.readText() }
+                conn = connection
+                val status = connection.responseCode
+                if (status == 429) {
+                    Log.w("Lente", "Google online translate HTTP 429")
+                    return@withContext null
+                }
+                if (status !in 200..299) {
+                    Log.w("Lente", "Google online translate HTTP $status")
+                    return@withContext null
+                }
+                val res = connection.inputStream.bufferedReader().use { it.readText() }
                 val root = JSONArray(res)
                 val sentences = root.getJSONArray(0)
                 val sb = StringBuilder()
@@ -135,16 +146,25 @@ class OcrTranslator {
                 }
                 val out = sb.toString().trim()
                 if (out.isNotEmpty()) out else null
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.w("Lente", "Google online translate error: ${e.message}")
                 null
+            } finally {
+                conn?.disconnect()
             }
         }
     }
 
-    private suspend fun translateOfflineMlKit(text: String, source: String, target: String): String? {
+    private suspend fun translateOfflineMlKit(
+        text: String,
+        source: String,
+        target: String,
+        unavailablePairs: MutableSet<String>
+    ): String? {
         val key = "$source>$target"
-        if (key in unavailableOfflineModels) return null
+        if (key in unavailablePairs) return null
         val translated = withTimeoutOrNull(8_000L) {
             try {
                 var t = offlineTranslators[key]
@@ -164,7 +184,7 @@ class OcrTranslator {
             }
         }
         if (translated == null) {
-            unavailableOfflineModels += key
+            unavailablePairs += key
             Log.w("Lente", "MLKit offline translation unavailable for $key")
         }
         return translated
@@ -211,7 +231,8 @@ class OcrTranslator {
                 ),
                 cluster.lineRects.map { RectF(it.l, it.t, it.r, it.b) },
                 cluster.sourceText,
-                cluster.isVertical
+                cluster.isVertical,
+                eraseRects = cluster.eraseRects.map { RectF(it.l, it.t, it.r, it.b) }
             )
         }.also { clusters ->
             Log.i("Lente", "cluster count=${clusters.size}")
@@ -236,16 +257,21 @@ class OcrTranslator {
     ): List<BalloonCluster> {
         if (clusters.isEmpty()) return emptyList()
         if (sourceLang == targetLang) {
-            return clusters.map { it.copy(translatedText = it.sourceText) }
+            return clusters.map {
+                Log.i("Lente", "translation path cluster=${it.id} via=source-identical")
+                it.copy(translatedText = it.sourceText)
+            }
         }
 
         val translated = arrayOfNulls<String>(clusters.size)
         val misses = mutableListOf<Int>()
+        var cacheHits = 0
         clusters.forEachIndexed { index, cluster ->
             val key = cacheKey(sourceLang, targetLang, cluster.sourceText)
             val cached = synchronized(translationCache) { translationCache.get(key) }
             if (cached != null) {
-                Log.i("Lente", "translation cache hit id=${cluster.id}")
+                cacheHits++
+                Log.i("Lente", "translation path cluster=${cluster.id} via=cache")
                 translated[index] = cached
             } else {
                 misses += index
@@ -266,30 +292,50 @@ class OcrTranslator {
         if (pending.isNotEmpty()) chunks += pending
 
         var requestCount = 0
+        val unavailablePairs = HashSet<String>()
         for (chunk in chunks) {
             val texts = chunk.map { clusters[it].sourceText }
-            var batch: List<String>? = null
+            var batchResult = BatchTranslationResult(null)
             if (formBodyLength(batchPayload(texts)) <= MAX_BATCH_BODY_CHARS) {
                 requestCount++
-                batch = translateBatch(texts, sourceLang, targetLang)
+                batchResult = translateBatch(texts, sourceLang, targetLang)
             }
+            val batch = batchResult.translations
             if (batch != null && batch.size == chunk.size) {
                 chunk.forEachIndexed { localIndex, clusterIndex ->
                     translated[clusterIndex] = batch[localIndex]
                     putCached(sourceLang, targetLang, clusters[clusterIndex].sourceText, batch[localIndex])
+                    Log.i("Lente", "translation path cluster=${clusters[clusterIndex].id} via=batch")
                 }
             } else {
+                if (batchResult.rateLimited) {
+                    Log.i("Lente", "Google batch HTTP 429; skipping per-cluster online fallback")
+                }
                 chunk.forEach { clusterIndex ->
-                    val original = clusters[clusterIndex].sourceText
-                    val result = translateGoogleOnline(original, sourceLang, targetLang)
-                        ?: translateOfflineMlKit(original, sourceLang, targetLang)
-                        ?: original
+                    val cluster = clusters[clusterIndex]
+                    val original = cluster.sourceText
+                    val online = if (batchResult.rateLimited) null
+                    else translateGoogleOnline(original, sourceLang, targetLang)
+                    val offline = if (online == null) {
+                        translateOfflineMlKit(original, sourceLang, targetLang, unavailablePairs)
+                    } else null
+                    val result = online ?: offline ?: original
                     translated[clusterIndex] = result
-                    putCached(sourceLang, targetLang, original, result)
+                    when {
+                        online != null -> {
+                            putCached(sourceLang, targetLang, original, online)
+                            Log.i("Lente", "translation path cluster=${cluster.id} via=google-online")
+                        }
+                        offline != null -> {
+                            putCached(sourceLang, targetLang, original, offline)
+                            Log.i("Lente", "translation path cluster=${cluster.id} via=mlkit-offline")
+                        }
+                        else -> Log.i("Lente", "translation path cluster=${cluster.id} via=source-fallback")
+                    }
                 }
             }
         }
-        Log.i("Lente", "batch requests=$requestCount, cache hits=${clusters.size - misses.size}")
+        Log.i("Lente", "batch requests=$requestCount, cache hits=$cacheHits")
         return clusters.mapIndexed { index, cluster ->
             cluster.copy(translatedText = translated[index] ?: cluster.sourceText)
         }
@@ -332,15 +378,26 @@ class OcrTranslator {
         }
     }
 
-    private suspend fun translateBatch(texts: List<String>, source: String, target: String): List<String>? {
-        if (texts.isEmpty()) return emptyList()
-        return withContext(Dispatchers.IO) {
+    private data class BatchTranslationResult(
+        val translations: List<String>?,
+        val rateLimited: Boolean = false
+    )
+
+    private suspend fun translateBatch(
+        texts: List<String>,
+        source: String,
+        target: String
+    ): BatchTranslationResult {
+        if (texts.isEmpty()) return BatchTranslationResult(emptyList())
+        return withTimeoutOrNull(8_500L) {
+            withContext(Dispatchers.IO) {
+                var conn: HttpURLConnection? = null
             try {
                 val sl = if (source == "auto" || source.isBlank()) "auto" else source
                 val tl = if (target.isBlank()) "it" else target
                 val url = URL("https://translate.googleapis.com/translate_a/single?client=gtx&sl=$sl&tl=$tl&dt=t")
                 val body = "q=" + URLEncoder.encode(batchPayload(texts), "UTF-8")
-                val conn = (url.openConnection() as HttpURLConnection).apply {
+                val connection = (url.openConnection() as HttpURLConnection).apply {
                     requestMethod = "POST"
                     doOutput = true
                     connectTimeout = 4000
@@ -348,15 +405,29 @@ class OcrTranslator {
                     setRequestProperty("User-Agent", "Mozilla/5.0")
                     setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
                 }
-                conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-                val response = conn.inputStream.bufferedReader().use { it.readText() }
-                conn.disconnect()
-                BatchMarkerParser.parse(translatedText(response), texts.size)
+                conn = connection
+                connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+                val status = connection.responseCode
+                if (status == 429) {
+                    Log.w("Lente", "Google batch translate HTTP 429")
+                    return@withContext BatchTranslationResult(null, rateLimited = true)
+                }
+                if (status !in 200..299) {
+                    Log.w("Lente", "Google batch translate HTTP $status")
+                    return@withContext BatchTranslationResult(null)
+                }
+                val response = connection.inputStream.bufferedReader().use { it.readText() }
+                BatchTranslationResult(BatchMarkerParser.parse(translatedText(response), texts.size))
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.w("Lente", "Google batch translate error: ${e.message}")
-                null
+                BatchTranslationResult(null)
+            } finally {
+                conn?.disconnect()
             }
-        }
+            }
+        } ?: BatchTranslationResult(null)
     }
 
     private fun translatedText(response: String): String? {

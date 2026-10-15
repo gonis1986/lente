@@ -14,14 +14,26 @@ import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import com.google.android.material.switchmaterial.SwitchMaterial
 import com.androbs.lens.a11y.LensAccessibilityService
+import com.google.android.material.switchmaterial.SwitchMaterial
+import com.google.mlkit.nl.translate.TranslateLanguage
+import com.google.mlkit.nl.translate.Translation
+import com.google.mlkit.nl.translate.TranslatorOptions
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.tasks.await
 import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
     private val sourceTags = listOf("auto", "ja", "en", "it", "es")
     private val targetTags = listOf("it", "en", "es", "ja")
+    private val modelDownloadScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -64,6 +76,10 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }
 
+        findViewById<Button>(R.id.btnDownloadModel).setOnClickListener {
+            downloadOfflineModel()
+        }
+
         setupSpinner(
             findViewById(R.id.spinnerSource), sourceTags, Prefs.sourceLang(this)
         ) { tag -> Prefs.setSourceLang(this, tag) }
@@ -82,6 +98,47 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         refreshStatus()
+    }
+
+    override fun onDestroy() {
+        modelDownloadScope.cancel()
+        super.onDestroy()
+    }
+
+    private fun downloadOfflineModel() {
+        val source = Prefs.sourceLang(this).takeIf { it != "auto" } ?: "ja"
+        val target = Prefs.targetLang(this)
+        val sourceLanguage = TranslateLanguage.fromLanguageTag(source)
+        val targetLanguage = TranslateLanguage.fromLanguageTag(target)
+        val status = findViewById<TextView>(R.id.offlineModelStatus)
+        status.visibility = View.VISIBLE
+        if (sourceLanguage == null || targetLanguage == null || sourceLanguage == targetLanguage) {
+            status.setText(R.string.offline_model_unavailable)
+            return
+        }
+
+        val button = findViewById<Button>(R.id.btnDownloadModel)
+        button.isEnabled = false
+        status.setText(R.string.status_downloading)
+        val translator = Translation.getClient(
+            TranslatorOptions.Builder()
+                .setSourceLanguage(sourceLanguage)
+                .setTargetLanguage(targetLanguage)
+                .build()
+        )
+        modelDownloadScope.launch {
+            try {
+                withContext(Dispatchers.IO) { translator.downloadModelIfNeeded().await() }
+                status.setText(R.string.offline_model_ready)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                status.text = getString(R.string.status_error, error.message ?: "?")
+            } finally {
+                translator.close()
+                button.isEnabled = true
+            }
+        }
     }
 
     private fun setupSpinner(

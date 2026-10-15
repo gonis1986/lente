@@ -140,7 +140,8 @@ class LensSession(context: Context) : VoiceInteractionSession(context) {
 
     private fun wire(content: View) {
         content.findViewById<Button>(R.id.btnSearch).setOnClickListener { onSearchClicked() }
-        content.findViewById<Button>(R.id.btnTranslate).setOnClickListener { onTranslateClicked() }
+        content.findViewById<Button>(R.id.btnTranslateSelection)
+            .setOnClickListener { onTranslateClicked() }
         content.findViewById<Button>(R.id.btnMode).setOnClickListener { toggleDisplayMode() }
         content.findViewById<Button>(R.id.btnClose).setOnClickListener { finish() }
         content.findViewById<Button>(R.id.btnLock).setOnClickListener { onLockClicked() }
@@ -228,7 +229,9 @@ class LensSession(context: Context) : VoiceInteractionSession(context) {
         source: String
     ): List<OcrTranslator.BalloonCluster> = withContext(Dispatchers.Default) {
         val translated = ocr.translateClusters(clusters, source, Prefs.targetLang(context))
-        translated.forEach { ColorSampler.apply(bitmap, it) }
+        translated.forEach {
+            ColorSampler.apply(bitmap, it, context.resources.displayMetrics.density)
+        }
         translated
     }
 
@@ -248,6 +251,8 @@ class LensSession(context: Context) : VoiceInteractionSession(context) {
             translations?.setHighlights(bitmap.width, bitmap.height, allClusters.map { RectF(it.outerBounds) })
             modeButton?.setText(R.string.banner_translate_all)
         } else {
+            selectedClusters = emptyList()
+            translations?.setSelection(emptyList())
             onTranslateClicked()
         }
     }
@@ -346,6 +351,8 @@ class LensSession(context: Context) : VoiceInteractionSession(context) {
                 val clusters = translateAndColor(detected, crop, source).map { cluster ->
                     cluster.outerBounds.offset(offset.left.toFloat(), offset.top.toFloat())
                     cluster.lineRects.forEach { it.offset(offset.left.toFloat(), offset.top.toFloat()) }
+                    cluster.eraseRects.forEach { it.offset(offset.left.toFloat(), offset.top.toFloat()) }
+                    cluster.writingRect?.offset(offset.left.toFloat(), offset.top.toFloat())
                     cluster.copy(id = "crop-${offset.left}-${offset.top}-${cluster.id}")
                 }
                 withContext(Dispatchers.Main) {

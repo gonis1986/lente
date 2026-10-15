@@ -24,7 +24,8 @@ data class ClusteredBalloon(
     val outerBounds: Box,
     val lineRects: List<Box>,
     val sourceText: String,
-    val isVertical: Boolean
+    val isVertical: Boolean,
+    val eraseRects: List<Box> = lineRects
 )
 
 /** Clusters OCR rows/columns into likely manga speech balloons. */
@@ -32,7 +33,8 @@ object MangaBalloonClusterer {
     private data class PreparedLine(
         val source: OcrLine,
         val text: String,
-        val vertical: Boolean
+        val vertical: Boolean,
+        val elements: List<OcrElement>
     )
 
     fun cluster(lines: List<OcrLine>): List<ClusteredBalloon> {
@@ -43,22 +45,25 @@ object MangaBalloonClusterer {
         val verticalCandidates = candidates.filter { isVertical(it) }
         val medianColumnWidth = median(verticalCandidates.map { it.box.width })
         val furiganaLimit = medianColumnWidth * 0.45f
+        val furigana = candidates.filter { isVertical(it) && it.box.width < furiganaLimit }
 
         val prepared = candidates.mapNotNull { line ->
             val vertical = isVertical(line)
             if (vertical && medianColumnWidth > 0f && line.box.width < furiganaLimit) {
                 return@mapNotNull null
             }
-            val text = if (vertical && line.elements.isNotEmpty()) {
-                line.elements
-                    .filter { medianColumnWidth <= 0f || it.box.width >= furiganaLimit }
-                    .sortedWith(compareBy<OcrElement> { it.box.t }.thenBy { it.box.l })
-                    .joinToString("") { normalize(it.text) }
-                    .ifBlank { normalize(line.text) }
+            val elements = if (vertical) {
+                deduplicateElements(
+                    line.elements.filter { medianColumnWidth <= 0f || it.box.width >= furiganaLimit }
+                        .sortedWith(compareBy<OcrElement> { it.box.t }.thenBy { it.box.l })
+                )
             } else {
-                normalize(line.text)
+                emptyList()
             }
-            if (text.isBlank()) null else PreparedLine(line, text, vertical)
+            val text = if (vertical && elements.isNotEmpty()) {
+                elements.joinToString("") { it.text }.ifBlank { normalize(line.text) }
+            } else normalize(line.text)
+            if (text.isBlank()) null else PreparedLine(line, text, vertical, elements)
         }
         if (prepared.isEmpty()) return emptyList()
 
@@ -107,10 +112,38 @@ object MangaBalloonClusterer {
             }
         }
 
-        return prepared.indices.groupBy { union.root(it) }.values.mapNotNull { indices ->
+        val groups = prepared.indices.groupBy { union.root(it) }
+        val furiganaByGroup = groups.keys.associateWith { mutableListOf<Box>() }
+        furigana.forEach { smallLine ->
+            val owner = groups.entries.mapNotNull { (root, indices) ->
+                val members = indices.map { prepared[it] }.filter { it.vertical }
+                val closest = members.mapNotNull { member ->
+                    val verticalOverlap = intervalOverlap(
+                        smallLine.box.t, smallLine.box.b,
+                        member.source.box.t, member.source.box.b
+                    )
+                    val overlapRatio = verticalOverlap /
+                        minOf(smallLine.box.height, member.source.box.height).coerceAtLeast(1f)
+                    val xGap = intervalGap(
+                        smallLine.box.l, smallLine.box.r,
+                        member.source.box.l, member.source.box.r
+                    )
+                    if (overlapRatio >= 0.2f && xGap < 1.65f * medianColumnWidth) {
+                        xGap + (1f - overlapRatio) * medianColumnWidth
+                    } else null
+                }.minOrNull()
+                closest?.let { root to it }
+            }.minByOrNull { it.second }?.first
+            if (owner != null) furiganaByGroup.getValue(owner) += smallLine.box
+        }
+
+        return groups.mapNotNull { (root, indices) ->
             val members = indices.map { prepared[it] }
             val vertical = members.first().vertical
-            val ordered = if (vertical) orderVertical(members, medianColumnWidth)
+            val verticalColumns = if (vertical) {
+                groupVerticalColumns(members, medianColumnWidth)
+            } else emptyList()
+            val ordered = if (vertical) verticalColumns.flatten()
             else members.sortedWith(
                 compareBy<PreparedLine> { it.source.box.t }.thenBy { it.source.box.l }
             )
@@ -122,7 +155,23 @@ object MangaBalloonClusterer {
                 boxes.maxOf { it.b }
             )
             val text = if (vertical) {
-                ordered.joinToString("") { it.text }
+                val seen = mutableListOf<OcrElement>()
+                val columnTexts = verticalColumns.map { column ->
+                    column.joinToString("") { line ->
+                        if (line.elements.isEmpty()) {
+                            val fallback = OcrElement(line.text, line.source.box)
+                            if (isDuplicate(fallback, seen)) "" else {
+                                seen += fallback
+                                line.text
+                            }
+                        } else {
+                            uniqueAgainst(line.elements, seen).joinToString("") { it.text }
+                        }
+                    }
+                }
+                columnTexts.fold("") { combined, column ->
+                    combined + column.drop(overlapAtColumnJoin(combined, column))
+                }
             } else {
                 ordered.joinToString(" ") { it.text }
             }.trim()
@@ -131,7 +180,8 @@ object MangaBalloonClusterer {
                 outerBounds = outer,
                 lineRects = ordered.map { it.source.box },
                 sourceText = text,
-                isVertical = vertical
+                isVertical = vertical,
+                eraseRects = (ordered.map { it.source.box } + furiganaByGroup.getValue(root))
             )
         }.sortedWith { first, second ->
             when {
@@ -173,7 +223,40 @@ object MangaBalloonClusterer {
         }
     }
 
-    private fun orderVertical(lines: List<PreparedLine>, medianWidth: Float): List<PreparedLine> {
+    private fun deduplicateElements(elements: List<OcrElement>): List<OcrElement> {
+        val seen = mutableListOf<OcrElement>()
+        return elements.mapNotNull { element ->
+            val normalized = OcrElement(normalize(element.text), element.box)
+            if (normalized.text.isBlank() || isDuplicate(normalized, seen)) null
+            else normalized.also { seen += it }
+        }
+    }
+
+    private fun uniqueAgainst(
+        elements: List<OcrElement>,
+        seen: MutableList<OcrElement>
+    ): List<OcrElement> = elements.filterNot { element ->
+        isDuplicate(element, seen)
+    }.onEach { seen += it }
+
+    private fun isDuplicate(candidate: OcrElement, seen: List<OcrElement>): Boolean =
+        seen.any { existing ->
+            existing.text == candidate.text &&
+                intersectionOverUnion(existing.box, candidate.box) > 0.5f
+        }
+
+    private fun intersectionOverUnion(first: Box, second: Box): Float {
+        val intersectionWidth = max(0f, minOf(first.r, second.r) - max(first.l, second.l))
+        val intersectionHeight = max(0f, minOf(first.b, second.b) - max(first.t, second.t))
+        val intersection = intersectionWidth * intersectionHeight
+        val union = first.width * first.height + second.width * second.height - intersection
+        return if (union <= 0f) 0f else intersection / union
+    }
+
+    private fun groupVerticalColumns(
+        lines: List<PreparedLine>,
+        medianWidth: Float
+    ): List<List<PreparedLine>> {
         val columns = mutableListOf<MutableList<PreparedLine>>()
         lines.sortedByDescending { it.source.box.centerX }.forEach { line ->
             val column = columns.firstOrNull { existing ->
@@ -184,11 +267,22 @@ object MangaBalloonClusterer {
         }
         return columns
             .sortedByDescending { column -> column.map { it.source.box.centerX }.average() }
-            .flatMap { column -> column.sortedBy { it.source.box.t } }
+            .map { column -> column.sortedBy { it.source.box.t } }
+    }
+
+    private fun overlapAtColumnJoin(previous: String, next: String): Int {
+        val limit = minOf(previous.length, next.length)
+        for (length in limit downTo 1) {
+            if (previous.regionMatches(previous.length - length, next, 0, length)) return length
+        }
+        return 0
     }
 
     private fun intervalsOverlap(a0: Float, a1: Float, b0: Float, b1: Float): Boolean =
         minOf(a1, b1) > maxOf(a0, b0)
+
+    private fun intervalOverlap(a0: Float, a1: Float, b0: Float, b1: Float): Float =
+        max(0f, minOf(a1, b1) - max(a0, b0))
 
     private fun intervalGap(a0: Float, a1: Float, b0: Float, b1: Float): Float =
         when {

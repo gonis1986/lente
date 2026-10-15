@@ -65,6 +65,18 @@
             android:textColor="#CBD5E1"
             android:textSize="15sp" />
 
+        <Button
+            android:id="@+id/btnTranslateSelection"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:autoSizeMaxTextSize="14sp"
+            android:autoSizeMinTextSize="9sp"
+            android:autoSizeStepGranularity="1sp"
+            android:autoSizeTextType="uniform"
+            android:maxLines="1"
+            android:text="@string/result_translate_it" />
+
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -138,22 +150,24 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1.2"
+            android:autoSizeMaxTextSize="12sp"
+            android:autoSizeMinTextSize="8sp"
+            android:autoSizeStepGranularity="1sp"
+            android:autoSizeTextType="uniform"
+            android:maxLines="1"
             android:text="@string/banner_search"
-            android:textSize="12sp" />
-
-        <Button
-            android:id="@+id/btnTranslate"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="@string/banner_translate"
             android:textSize="12sp" />
 
         <Button
             android:id="@+id/btnMode"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_weight="1.2"
+            android:layout_weight="1.4"
+            android:autoSizeMaxTextSize="12sp"
+            android:autoSizeMinTextSize="8sp"
+            android:autoSizeStepGranularity="1sp"
+            android:autoSizeTextType="uniform"
+            android:maxLines="1"
             android:text="@string/banner_show_original"
             android:textSize="10sp" />
 
@@ -161,7 +175,12 @@
             android:id="@+id/btnLock"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_weight="0.8"
+            android:layout_weight="0.7"
+            android:autoSizeMaxTextSize="12sp"
+            android:autoSizeMinTextSize="8sp"
+            android:autoSizeStepGranularity="1sp"
+            android:autoSizeTextType="uniform"
+            android:maxLines="1"
             android:text="@string/banner_lock"
             android:textSize="12sp" />
 
@@ -169,7 +188,12 @@
             android:id="@+id/btnClose"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_weight="0.8"
+            android:layout_weight="0.7"
+            android:autoSizeMaxTextSize="12sp"
+            android:autoSizeMinTextSize="8sp"
+            android:autoSizeStepGranularity="1sp"
+            android:autoSizeTextType="uniform"
+            android:maxLines="1"
             android:text="@string/banner_close"
             android:textSize="12sp" />
     </LinearLayout>

@@ -10,16 +10,19 @@ import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.graphics.RectF
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.util.Log
 import android.view.Choreographer
 import android.view.Display
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -39,6 +42,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.math.roundToInt
 import kotlin.coroutines.resume
 
 /**
@@ -62,6 +66,12 @@ class LensAccessibilityService : AccessibilityService() {
     private var wm: WindowManager? = null
     private var overlay: TranslationLayerView? = null
     private var controller: View? = null
+    private var controllerPill: View? = null
+    private var controllerMenu: LinearLayout? = null
+    private var controllerParams: WindowManager.LayoutParams? = null
+    private var controllerExpanded = false
+    private var controllerOnLeft = false
+    private var collapseJob: Job? = null
     private var readerModal: View? = null
 
     @Volatile
@@ -142,12 +152,16 @@ class LensAccessibilityService : AccessibilityService() {
         capturing = false
         captureAfterCurrent = false
         scrollJob?.cancel()
+        collapseJob?.cancel()
         scope.launch(Dispatchers.Main) {
             overlay?.let { wm?.removeViewImmediate(it) }
             controller?.let { wm?.removeViewImmediate(it) }
             readerModal?.let { wm?.removeViewImmediate(it) }
             overlay = null
             controller = null
+            controllerPill = null
+            controllerMenu = null
+            controllerParams = null
             readerModal = null
         }
     }
@@ -173,117 +187,228 @@ class LensAccessibilityService : AccessibilityService() {
             overlay = layer
         }
 
-        if (controller == null) {
-            val bar = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                setBackgroundColor(0xF0111827.toInt())
-                setPadding(12, 10, 12, 10)
-            }
+        if (controller != null) return
 
-            val lensBtn = Button(this).apply {
-                text = "🔍"
-                contentDescription = getString(R.string.controller_lens)
+        val root = FrameLayout(this)
+        val pill = TextView(this).apply {
+            text = "🔍"
+            contentDescription = getString(R.string.controller_menu)
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            textSize = 18f
+            background = controllerBackground(0xFF4F46E5.toInt(), 24f)
+        }
+        val menu = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+            visibility = View.GONE
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+            background = controllerBackground(0xF0111827.toInt(), 24f)
+        }
+        fun addAction(
+            icon: String,
+            description: Int,
+            color: Int,
+            onClick: () -> Unit
+        ): TextView {
+            val button = TextView(this).apply {
+                text = icon
+                contentDescription = getString(description)
+                gravity = Gravity.CENTER
                 setTextColor(Color.WHITE)
-                setBackgroundColor(0xFF4F46E5.toInt())
-                textSize = 16f
-                setPadding(4, 2, 4, 2)
-                setOnClickListener {
-                    scope.launch { launchGoogleLensWithScreenshot() }
+                textSize = 17f
+                background = controllerBackground(color, 20f)
+                setOnClickListener { onClick() }
+            }
+            menu.addView(
+                button,
+                LinearLayout.LayoutParams(dp(40), dp(40)).apply {
+                    setMargins(dp(2), 0, dp(2), 0)
                 }
-            }
+            )
+            return button
+        }
 
-            val translateBtn = Button(this).apply {
-                text = "↻"
-                contentDescription = getString(R.string.controller_translate)
-                setTextColor(Color.WHITE)
-                setBackgroundColor(0xFF2563EB.toInt())
-                textSize = 16f
-                setPadding(4, 2, 4, 2)
-                setOnClickListener {
-                    scope.launch { captureAndTranslate() }
-                }
-            }
-
-            val readBtn = Button(this).apply {
-                text = "📖"
-                contentDescription = getString(R.string.controller_reader)
-                setTextColor(Color.WHITE)
-                setBackgroundColor(0xFF0D9488.toInt())
-                textSize = 16f
-                setPadding(4, 2, 4, 2)
-                setOnClickListener {
-                    showReaderModal()
-                }
-            }
-
-            val stopBtn = Button(this).apply {
-                text = "×"
-                contentDescription = getString(R.string.lock_stop)
-                setTextColor(Color.WHITE)
-                setBackgroundColor(0xFFDC2626.toInt())
-                textSize = 16f
-                setPadding(4, 2, 4, 2)
-                setOnClickListener { setLockEnabled(false) }
-            }
-
-            val marginLp = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(6, 0, 6, 0) }
-
-            bar.addView(lensBtn, marginLp)
-            bar.addView(translateBtn, marginLp)
-            bar.addView(readBtn, marginLp)
-            bar.addView(stopBtn, marginLp)
-
-            val lp = WindowManager.LayoutParams(
-                WindowManager.LayoutParams.WRAP_CONTENT,
-                WindowManager.LayoutParams.WRAP_CONTENT,
-                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                PixelFormat.TRANSLUCENT
+        addAction("🔍", R.string.controller_lens, 0xFF4F46E5.toInt()) {
+            scope.launch { launchGoogleLensWithScreenshot() }
+        }
+        addAction("↻", R.string.controller_translate, 0xFF2563EB.toInt()) {
+            paused = false
+            refreshPauseAction()
+            scope.launch { captureAndTranslate() }
+        }
+        val pauseAction = addAction(
+            if (paused) "▶" else "Ⅱ",
+            if (paused) R.string.lock_resume else R.string.lock_pause,
+            0xFF475569.toInt()
+        ) {
+            paused = !paused
+            refreshPauseAction()
+            if (!paused) scope.launch { captureAndTranslate() }
+        }
+        addAction("📖", R.string.controller_reader, 0xFF0D9488.toInt()) {
+            showReaderModal()
+        }
+        addAction("×", R.string.lock_stop, 0xFFDC2626.toInt()) {
+            setLockEnabled(false)
+        }
+        root.addView(
+            menu,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                dp(48)
             ).apply {
-                gravity = Gravity.TOP or Gravity.RIGHT
-                x = 8
-                y = 160
+                gravity = Gravity.LEFT or Gravity.CENTER_VERTICAL
             }
-            manager.addView(bar, lp)
-            var downX = 0f
-            var downY = 0f
-            var startX = 0
-            var startY = 0
-            var moved = false
-            bar.setOnTouchListener { _, event ->
-                when (event.actionMasked) {
-                    android.view.MotionEvent.ACTION_DOWN -> {
-                        downX = event.rawX
-                        downY = event.rawY
-                        val current = bar.layoutParams as WindowManager.LayoutParams
-                        startX = current.x
-                        startY = current.y
-                        moved = false
-                        false
-                    }
-                    android.view.MotionEvent.ACTION_MOVE -> {
-                        val dx = (event.rawX - downX).toInt()
-                        val dy = (event.rawY - downY).toInt()
-                        if (!moved && (kotlin.math.abs(dx) > 8 || kotlin.math.abs(dy) > 8)) moved = true
-                        if (moved) {
-                            val current = bar.layoutParams as WindowManager.LayoutParams
-                            current.x = (startX - dx).coerceAtLeast(0)
-                            current.y = (startY + dy).coerceAtLeast(0)
-                            manager.updateViewLayout(bar, current)
-                            true
-                        } else false
-                    }
-                    android.view.MotionEvent.ACTION_UP -> moved
-                    else -> false
+        )
+        root.addView(
+            pill,
+            FrameLayout.LayoutParams(dp(48), dp(48)).apply {
+                gravity = Gravity.RIGHT or Gravity.CENTER_VERTICAL
+            }
+        )
+
+        val lp = WindowManager.LayoutParams(
+            dp(48),
+            dp(48),
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.RIGHT
+            x = 0
+            y = dp(160)
+        }
+        manager.addView(root, lp)
+        controller = root
+        controllerPill = pill
+        controllerMenu = menu
+        controllerParams = lp
+        controllerOnLeft = false
+        pauseAction.tag = "controllerPauseAction"
+        refreshPauseAction()
+
+        var downX = 0f
+        var downY = 0f
+        var startY = 0
+        var moved = false
+        pill.setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downX = event.rawX
+                    downY = event.rawY
+                    startY = controllerParams?.y ?: 0
+                    moved = false
+                    true
                 }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = event.rawX - downX
+                    val dy = event.rawY - downY
+                    if (!moved && (kotlin.math.abs(dx) > dp(8) || kotlin.math.abs(dy) > dp(8))) {
+                        moved = true
+                        collapseJob?.cancel()
+                    }
+                    if (moved) {
+                        val params = controllerParams ?: return@setOnTouchListener true
+                        params.y = (startY + dy.toInt()).coerceIn(
+                            0,
+                            (resources.displayMetrics.heightPixels - dp(48)).coerceAtLeast(0)
+                        )
+                        manager.updateViewLayout(root, params)
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (moved) snapControllerToEdge(event.rawX)
+                    else toggleControllerMenu()
+                    true
+                }
+                else -> true
             }
-            controller = bar
         }
     }
+
+    private fun toggleControllerMenu() {
+        setControllerExpanded(!controllerExpanded)
+    }
+
+    private fun setControllerExpanded(expanded: Boolean) {
+        val view = controller ?: return
+        val menu = controllerMenu ?: return
+        val params = controllerParams ?: return
+        controllerExpanded = expanded
+        menu.visibility = if (expanded) View.VISIBLE else View.GONE
+        if (expanded) {
+            val unspecified = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+            menu.measure(unspecified, unspecified)
+        }
+        params.width = if (expanded) dp(48) + menu.measuredWidth else dp(48)
+        arrangeControllerViews()
+        wm?.updateViewLayout(view, params)
+        view.post {
+            val childBounds = (0 until menu.childCount).joinToString("|") { index ->
+                val child = menu.getChildAt(index)
+                "${child.left}-${child.right}:${child.visibility}"
+            }
+            Log.i(
+                "Lente",
+                "controller expanded=$expanded root=${view.width}x${view.height} " +
+                    "menu=${menu.width}x${menu.height} bounds=${menu.left}-${menu.right} " +
+                    "children=$childBounds"
+            )
+        }
+        collapseJob?.cancel()
+        if (expanded) {
+            collapseJob = scope.launch {
+                delay(4_000)
+                setControllerExpanded(false)
+            }
+        }
+    }
+
+    private fun snapControllerToEdge(rawX: Float) {
+        val view = controller ?: return
+        val params = controllerParams ?: return
+        controllerOnLeft = rawX < resources.displayMetrics.widthPixels / 2f
+        params.gravity = Gravity.TOP or (if (controllerOnLeft) Gravity.LEFT else Gravity.RIGHT)
+        params.x = 0
+        arrangeControllerViews()
+        wm?.updateViewLayout(view, params)
+    }
+
+    private fun arrangeControllerViews() {
+        val root = controller as? FrameLayout ?: return
+        val pill = controllerPill ?: return
+        val menu = controllerMenu ?: return
+        val pillParams = pill.layoutParams as? FrameLayout.LayoutParams ?: return
+        val menuParams = menu.layoutParams as? FrameLayout.LayoutParams ?: return
+        pillParams.gravity = (if (controllerOnLeft) Gravity.LEFT else Gravity.RIGHT) or
+            Gravity.CENTER_VERTICAL
+        menuParams.gravity = (if (controllerOnLeft) Gravity.RIGHT else Gravity.LEFT) or
+            Gravity.CENTER_VERTICAL
+        pill.layoutParams = pillParams
+        menu.layoutParams = menuParams
+    }
+
+    private fun refreshPauseAction() {
+        val action = controllerMenu?.findViewWithTag<TextView>("controllerPauseAction") ?: return
+        action.text = if (paused) "▶" else "Ⅱ"
+        action.contentDescription = getString(
+            if (paused) R.string.lock_resume else R.string.lock_pause
+        )
+    }
+
+    private fun controllerBackground(color: Int, radiusDp: Float) =
+        GradientDrawable().apply {
+            setColor(color)
+            cornerRadius = dp(radiusDp.toInt()).toFloat()
+        }
+
+    private fun dp(value: Int): Int =
+        (value * resources.displayMetrics.density).roundToInt()
 
     private suspend fun launchGoogleLensWithScreenshot() {
         val capture = takeScreenshotAsync() ?: return
@@ -328,7 +453,9 @@ class LensAccessibilityService : AccessibilityService() {
                     sourcePref
                 )
                 val translated = ocr.translateClusters(detected, source, target)
-                translated.forEach { ColorSampler.apply(bmp, it) }
+                translated.forEach {
+                    ColorSampler.apply(bmp, it, resources.displayMetrics.density)
+                }
                 synchronized(currentTranslatedTexts) {
                     currentTranslatedTexts.clear()
                     for (cluster in translated) {

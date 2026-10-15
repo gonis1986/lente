@@ -17,6 +17,8 @@ class MangaBalloonClustererTest {
 
         assertEquals(1, balloons.size)
         assertEquals("漢字続く", balloons.single().sourceText)
+        assertEquals(2, balloons.single().lineRects.size)
+        assertEquals(3, balloons.single().eraseRects.size)
     }
 
     @Test
@@ -58,6 +60,40 @@ class MangaBalloonClustererTest {
         assertEquals(1, balloons.size)
         assertEquals("first line second line", balloons.single().sourceText)
         assertTrue(!balloons.single().isVertical)
+    }
+
+    @Test
+    fun deduplicatesOverlappingElementsWithSameText() {
+        val balloons = MangaBalloonClusterer.cluster(
+            listOf(
+                OcrLine(
+                    "見",
+                    Box(100f, 100f, 120f, 220f),
+                    listOf(OcrElement("見", Box(100f, 110f, 120f, 130f)))
+                ),
+                OcrLine(
+                    "見",
+                    Box(103f, 100f, 123f, 220f),
+                    listOf(OcrElement("見", Box(103f, 110f, 123f, 130f)))
+                )
+            )
+        )
+
+        assertEquals(1, balloons.size)
+        assertEquals("見", balloons.single().sourceText)
+    }
+
+    @Test
+    fun removesDuplicateCharacterAtVerticalColumnJoin() {
+        val balloons = MangaBalloonClusterer.cluster(
+            listOf(
+                vertical("本当に大切なものを見", 160f, 100f, 180f, 220f),
+                vertical("見つけられるかな。", 130f, 100f, 150f, 220f)
+            )
+        )
+
+        assertEquals(1, balloons.size)
+        assertEquals("本当に大切なものを見つけられるかな。", balloons.single().sourceText)
     }
 
     private fun vertical(text: String, l: Float, t: Float, r: Float, b: Float) =

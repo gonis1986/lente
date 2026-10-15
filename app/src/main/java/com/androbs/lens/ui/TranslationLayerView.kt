@@ -32,7 +32,8 @@ class TranslationLayerView @JvmOverloads constructor(
         val lineRects: List<RectF> = listOf(rect),
         val halo: Int = bg,
         val isVertical: Boolean = false,
-        val widenVertically: Boolean = false
+        val eraseRects: List<RectF> = lineRects,
+        val writingRect: RectF? = null
     )
 
     private var boxes: List<Box> = emptyList()
@@ -93,14 +94,15 @@ class TranslationLayerView @JvmOverloads constructor(
             sourceHeight,
             clusters.map { cluster ->
                 Box(
-                    RectF(cluster.outerBounds),
-                    cluster.translatedText,
-                    cluster.bgColor,
-                    cluster.textColor,
-                    cluster.lineRects.map { RectF(it) },
-                    cluster.strokeHaloColor,
-                    cluster.isVertical,
-                    cluster.widenVertically
+                    rect = RectF(cluster.outerBounds),
+                    text = cluster.translatedText,
+                    bg = cluster.bgColor,
+                    fg = cluster.textColor,
+                    lineRects = cluster.lineRects.map { RectF(it) },
+                    halo = cluster.strokeHaloColor,
+                    isVertical = cluster.isVertical,
+                    eraseRects = cluster.eraseRects.map { RectF(it) },
+                    writingRect = cluster.writingRect?.let { RectF(it) }
                 )
             },
             offsetX,
@@ -190,23 +192,33 @@ class TranslationLayerView @JvmOverloads constructor(
             val lines = box.lineRects.map { line ->
                 RectF().also { matrix.mapRect(it, line) }
             }
-            drawInpainting(canvas, lines, box.bg, box.isVertical)
-            matrix.mapRect(mapped, box.rect)
-            val target = RectF(mapped)
-            if (box.isVertical && box.widenVertically) {
-                val extra = target.width() * 0.2f
-                target.left = (target.left - extra * 0.5f).coerceAtLeast(8f)
-                target.right = (target.right + extra * 0.5f).coerceAtMost(width - 8f)
+            val eraseRects = box.eraseRects.map { rect ->
+                RectF().also { matrix.mapRect(it, rect) }
             }
-            target.inset(dp(2f), dp(2f))
+            val writingRect = box.writingRect?.let { rect ->
+                RectF().also { matrix.mapRect(it, rect) }
+            }
+            drawInpainting(canvas, lines, eraseRects, box.bg, box.isVertical, writingRect)
+            matrix.mapRect(mapped, box.writingRect ?: box.rect)
+            val target = RectF(mapped)
+            if (!box.isVertical || box.writingRect == null) target.inset(dp(2f), dp(2f))
             drawAdaptiveText(canvas, target, box.text, box.fg, box.halo)
         }
         drawShimmer(canvas)
     }
 
-    private fun drawInpainting(canvas: Canvas, lines: List<RectF>, color: Int, vertical: Boolean) {
+    private fun drawInpainting(
+        canvas: Canvas,
+        lines: List<RectF>,
+        eraseRects: List<RectF>,
+        color: Int,
+        vertical: Boolean,
+        writingRect: RectF?
+    ) {
         val expansion = dp(3.5f)
-        val patches = lines.map { RectF(it).apply { inset(-expansion, -expansion) } }.toMutableList()
+        val patches = eraseRects.map {
+            RectF(it).apply { inset(-expansion, -expansion) }
+        }.toMutableList()
         if (vertical) {
             for (i in lines.indices) {
                 for (j in i + 1 until lines.size) {
@@ -221,6 +233,7 @@ class TranslationLayerView @JvmOverloads constructor(
                     }
                 }
             }
+            writingRect?.let { patches += RectF(it) }
         }
         patchPaint.color = color
         patchPaint.maskFilter = BlurMaskFilter(dp(3.5f), BlurMaskFilter.Blur.NORMAL)

@@ -11,6 +11,9 @@
     <string name="hint_trigger">Then hold the Home button (or swipe up from a corner) in any app: the Lente banner appears without leaving the app.</string>
     <string name="label_source_lang">Translate from</string>
     <string name="label_target_lang">Translate to</string>
+    <string name="btn_download_model">Download offline translation model</string>
+    <string name="offline_model_ready">Offline translation model ready.</string>
+    <string name="offline_model_unavailable">Choose different source and target languages to download a model.</string>
     <string name="lang_auto">Auto</string>
     <string name="banner_search">Search screen</string>
     <string name="banner_translate">Translate</string>
@@ -28,7 +31,7 @@
     <string name="result_search_google">Search on Google</string>
     <string name="result_copy">Copy</string>
     <string name="result_copied">Copied</string>
-    <string name="result_translate_it">Translate this text</string>
+    <string name="result_translate_it">Translate selection</string>
     <string name="lock_enable_first">First enable \"Scroll translation\" in the Lente app</string>
     <string name="lock_active">Lock active: translating while you scroll</string>
     <string name="lock_pause">Pause</string>
@@ -44,6 +47,7 @@
     <string name="open_google_lens">Open with Google Lens</string>
     <string name="error_google_lens">Could not open Google Lens: %1$s</string>
     <string name="controller_lens">Open Google Lens</string>
+    <string name="controller_menu">Open translation controls</string>
     <string name="controller_translate">Translate screen</string>
     <string name="controller_reader">Open translation reader</string>
 </resources>
