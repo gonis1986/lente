@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Lente</string>
+    <string name="a11y_description">ロックモードでスクロールを検出して画面を翻訳し続けるために使用します。</string>
+    <string name="btn_set_assistant">Lenteをアシスタントに設定</string>
+    <string name="btn_enable_a11y">スクロール翻訳を有効化（ユーザー補助）</string>
+    <string name="status_assistant_ok">アシスタント: 有効</string>
+    <string name="status_assistant_off">アシスタント: 未設定 — ホーム長押しでLenteは開きません</string>
+    <string name="status_a11y_ok">スクロール翻訳: 有効</string>
+    <string name="status_a11y_off">スクロール翻訳: 無効</string>
+    <string name="hint_trigger">その後、どのアプリでもホームボタン長押し（または角からスワイプ）で、アプリを離れずにLenteバナーが表示されます。</string>
+    <string name="label_source_lang">翻訳元</string>
+    <string name="label_target_lang">翻訳先</string>
+    <string name="lang_auto">自動</string>
+    <string name="banner_search">画面を検索</string>
+    <string name="banner_translate">翻訳</string>
+    <string name="banner_lock">ロック</string>
+    <string name="banner_close">閉じる</string>
+    <string name="hint_drag">テキストの上で四角をドラッグ</string>
+    <string name="status_working">翻訳中…</string>
+    <string name="status_downloading">言語モデルをダウンロード中…</string>
+    <string name="status_no_text">テキストが見つかりません</string>
+    <string name="status_no_screenshot">このアプリは画面キャプチャを許可していません</string>
+    <string name="status_error">エラー: %1$s</string>
+    <string name="result_search_google">Googleで検索</string>
+    <string name="result_copy">コピー</string>
+    <string name="result_copied">コピーしました</string>
+    <string name="result_translate_it">このテキストを翻訳</string>
+    <string name="lock_enable_first">先にLenteアプリで「スクロール翻訳」を有効にしてください</string>
+    <string name="lock_active">ロック中: スクロールしながら翻訳します</string>
+    <string name="lock_pause">一時停止</string>
+    <string name="lock_resume">再開</string>
+    <string name="lock_stop">停止</string>
+</resources>

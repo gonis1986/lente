@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Lente</string>
+    <string name="a11y_description">Allows Lente to detect scrolling and keep translating the screen in lock mode.</string>
+    <string name="btn_set_assistant">Set Lente as assistant</string>
+    <string name="btn_enable_a11y">Enable scroll translation (accessibility)</string>
+    <string name="status_assistant_ok">Assistant: active</string>
+    <string name="status_assistant_off">Assistant: not set — long-press Home won\'t open Lente</string>
+    <string name="status_a11y_ok">Scroll translation: enabled</string>
+    <string name="status_a11y_off">Scroll translation: disabled</string>
+    <string name="hint_trigger">Then hold the Home button (or swipe up from a corner) in any app: the Lente banner appears without leaving the app.</string>
+    <string name="label_source_lang">Translate from</string>
+    <string name="label_target_lang">Translate to</string>
+    <string name="lang_auto">Auto</string>
+    <string name="banner_search">Search screen</string>
+    <string name="banner_translate">Translate</string>
+    <string name="banner_lock">Lock</string>
+    <string name="banner_close">Close</string>
+    <string name="hint_drag">Drag a rectangle over the text</string>
+    <string name="status_working">Translating…</string>
+    <string name="status_downloading">Downloading language model…</string>
+    <string name="status_no_text">No text found</string>
+    <string name="status_no_screenshot">This app doesn\'t allow screen capture</string>
+    <string name="status_error">Error: %1$s</string>
+    <string name="result_search_google">Search on Google</string>
+    <string name="result_copy">Copy</string>
+    <string name="result_copied">Copied</string>
+    <string name="result_translate_it">Translate this text</string>
+    <string name="lock_enable_first">First enable \"Scroll translation\" in the Lente app</string>
+    <string name="lock_active">Lock active: translating while you scroll</string>
+    <string name="lock_pause">Pause</string>
+    <string name="lock_resume">Resume</string>
+    <string name="lock_stop">Stop</string>
+</resources>

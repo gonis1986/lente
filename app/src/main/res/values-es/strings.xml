@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Lente</string>
+    <string name="a11y_description">Permite a Lente detectar el desplazamiento y seguir traduciendo la pantalla en modo bloqueo.</string>
+    <string name="btn_set_assistant">Establecer Lente como asistente</string>
+    <string name="btn_enable_a11y">Activar traducción al desplazar (accesibilidad)</string>
+    <string name="status_assistant_ok">Asistente: activo</string>
+    <string name="status_assistant_off">Asistente: no configurado — mantener Home no abrirá Lente</string>
+    <string name="status_a11y_ok">Traducción al desplazar: activada</string>
+    <string name="status_a11y_off">Traducción al desplazar: desactivada</string>
+    <string name="hint_trigger">Luego mantén pulsado Home (o desliza desde una esquina) en cualquier app: el banner de Lente aparece sin salir de la app.</string>
+    <string name="label_source_lang">Traducir de</string>
+    <string name="label_target_lang">Traducir a</string>
+    <string name="lang_auto">Automático</string>
+    <string name="banner_search">Buscar en pantalla</string>
+    <string name="banner_translate">Traducir</string>
+    <string name="banner_lock">Candado</string>
+    <string name="banner_close">Cerrar</string>
+    <string name="hint_drag">Arrastra un rectángulo sobre el texto</string>
+    <string name="status_working">Traduciendo…</string>
+    <string name="status_downloading">Descargando modelo de idioma…</string>
+    <string name="status_no_text">No se encontró texto</string>
+    <string name="status_no_screenshot">Esta app no permite capturar la pantalla</string>
+    <string name="status_error">Error: %1$s</string>
+    <string name="result_search_google">Buscar en Google</string>
+    <string name="result_copy">Copiar</string>
+    <string name="result_copied">Copiado</string>
+    <string name="result_translate_it">Traducir este texto</string>
+    <string name="lock_enable_first">Activa primero \"Traducción al desplazar\" en la app Lente</string>
+    <string name="lock_active">Bloqueo activo: traduciendo mientras te desplazas</string>
+    <string name="lock_pause">Pausar</string>
+    <string name="lock_resume">Reanudar</string>
+    <string name="lock_stop">Detener</string>
+</resources>

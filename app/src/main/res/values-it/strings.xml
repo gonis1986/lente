@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Lente</string>
+    <string name="a11y_description">Permette a Lente di rilevare lo scorrimento e continuare a tradurre lo schermo in modalità blocco.</string>
+    <string name="btn_set_assistant">Imposta Lente come assistente</string>
+    <string name="btn_enable_a11y">Attiva traduzione allo scroll (accessibilità)</string>
+    <string name="status_assistant_ok">Assistente: attivo</string>
+    <string name="status_assistant_off">Assistente: non impostato — il long-press di Home non aprirà Lente</string>
+    <string name="status_a11y_ok">Traduzione allo scroll: attiva</string>
+    <string name="status_a11y_off">Traduzione allo scroll: disattivata</string>
+    <string name="hint_trigger">Poi tieni premuto il tasto Home (o scorri da un angolo in basso) in qualsiasi app: il banner di Lente appare senza uscire dall\'app.</string>
+    <string name="label_source_lang">Traduci da</string>
+    <string name="label_target_lang">Traduci in</string>
+    <string name="lang_auto">Automatico</string>
+    <string name="banner_search">Cerca sullo schermo</string>
+    <string name="banner_translate">Traduci</string>
+    <string name="banner_lock">Lucchetto</string>
+    <string name="banner_close">Chiudi</string>
+    <string name="hint_drag">Trascina un rettangolo sul testo</string>
+    <string name="status_working">Traduzione in corso…</string>
+    <string name="status_downloading">Scarico il modello di lingua…</string>
+    <string name="status_no_text">Nessun testo trovato</string>
+    <string name="status_no_screenshot">Questa app non consente la cattura dello schermo</string>
+    <string name="status_error">Errore: %1$s</string>
+    <string name="result_search_google">Cerca su Google</string>
+    <string name="result_copy">Copia</string>
+    <string name="result_copied">Copiato</string>
+    <string name="result_translate_it">Traduci questo testo</string>
+    <string name="lock_enable_first">Prima attiva \"Traduzione allo scroll\" nell\'app Lente</string>
+    <string name="lock_active">Blocco attivo: traduco mentre scorri</string>
+    <string name="lock_pause">Pausa</string>
+    <string name="lock_resume">Riprendi</string>
+    <string name="lock_stop">Stop</string>
+</resources>
