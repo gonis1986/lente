@@ -30,6 +30,8 @@ import android.widget.Toast
 import com.androbs.lens.Prefs
 import com.androbs.lens.R
 import com.androbs.lens.lens.GoogleLensLauncher
+import com.androbs.lens.ocr.Box as OcrBox
+import com.androbs.lens.ocr.MangaBalloonClusterer
 import com.androbs.lens.ocr.OcrTranslator
 import com.androbs.lens.ui.ColorSampler
 import com.androbs.lens.ui.TranslationLayerView
@@ -42,6 +44,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.suspendCancellableCoroutine
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.roundToInt
 import kotlin.coroutines.resume
 
@@ -84,6 +87,7 @@ class LensAccessibilityService : AccessibilityService() {
     private var lastCaptureMs = 0L
     private var scrollJob: Job? = null
     private var previousGrayFrame: IntArray? = null
+    private val scrollGeneration = AtomicLong()
 
     private data class ScreenshotCapture(
         val bitmap: Bitmap,
@@ -107,12 +111,17 @@ class LensAccessibilityService : AccessibilityService() {
         if (event.eventType != AccessibilityEvent.TYPE_VIEW_SCROLLED &&
             event.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
         ) return
+        val generation = scrollGeneration.incrementAndGet()
+        overlay?.alpha = 0f
+        overlay?.clearAll()
+        synchronized(currentTranslatedTexts) { currentTranslatedTexts.clear() }
+        Log.i("Lente", "lock scroll invalidated generation=$generation")
         scrollJob?.cancel()
         scrollJob = scope.launch {
             delay(280)
             val remaining = 950L - (System.currentTimeMillis() - lastCaptureMs)
             if (remaining > 0) delay(remaining)
-            captureAndTranslate()
+            captureAndTranslate(generation)
         }
     }
 
@@ -135,12 +144,14 @@ class LensAccessibilityService : AccessibilityService() {
 
     fun setLockEnabled(on: Boolean) {
         if (on) {
+            val generation = scrollGeneration.incrementAndGet()
             lockOn = true
             paused = false
             addOverlay()
+            overlay?.clearAll()
             scope.launch {
                 delay(350)
-                captureAndTranslate()
+                captureAndTranslate(generation)
             }
         } else {
             disableLockInternal()
@@ -148,11 +159,13 @@ class LensAccessibilityService : AccessibilityService() {
     }
 
     private fun disableLockInternal() {
+        scrollGeneration.incrementAndGet()
         lockOn = false
         capturing = false
         captureAfterCurrent = false
         scrollJob?.cancel()
         collapseJob?.cancel()
+        overlay?.clearAll()
         scope.launch(Dispatchers.Main) {
             overlay?.let { wm?.removeViewImmediate(it) }
             controller?.let { wm?.removeViewImmediate(it) }
@@ -236,7 +249,7 @@ class LensAccessibilityService : AccessibilityService() {
         addAction("↻", R.string.controller_translate, 0xFF2563EB.toInt()) {
             paused = false
             refreshPauseAction()
-            scope.launch { captureAndTranslate() }
+            scope.launch { captureAndTranslate(scrollGeneration.get()) }
         }
         val pauseAction = addAction(
             if (paused) "▶" else "Ⅱ",
@@ -245,7 +258,7 @@ class LensAccessibilityService : AccessibilityService() {
         ) {
             paused = !paused
             refreshPauseAction()
-            if (!paused) scope.launch { captureAndTranslate() }
+            if (!paused) scope.launch { captureAndTranslate(scrollGeneration.get()) }
         }
         addAction("📖", R.string.controller_reader, 0xFF0D9488.toInt()) {
             showReaderModal()
@@ -419,8 +432,8 @@ class LensAccessibilityService : AccessibilityService() {
         }
     }
 
-    private suspend fun captureAndTranslate() {
-        if (!lockOn || paused) return
+    private suspend fun captureAndTranslate(expectedGeneration: Long = scrollGeneration.get()) {
+        if (!lockOn || paused || expectedGeneration != scrollGeneration.get()) return
         if (capturing) {
             captureAfterCurrent = true
             return
@@ -430,65 +443,95 @@ class LensAccessibilityService : AccessibilityService() {
         try {
             val remaining = 950L - (System.currentTimeMillis() - lastCaptureMs)
             if (remaining > 0) delay(remaining)
+            if (expectedGeneration != scrollGeneration.get()) return
             lastCaptureMs = System.currentTimeMillis()
             overlay?.setProcessing(true)
             val capture = takeScreenshotAsync() ?: return
             val bmp = capture.bitmap
             capturedBitmap = bmp
+            if (expectedGeneration != scrollGeneration.get()) {
+                Log.i(
+                    "Lente",
+                    "lock capture dropped stale generation=$expectedGeneration current=${scrollGeneration.get()}"
+                )
+                return
+            }
             if (!hasMeaningfulDiff(bmp)) {
                 Log.i("Lente", "lock diff guard skipped unchanged frame")
-                overlay?.setProcessing(false)
                 return
             }
             val sourcePref = Prefs.sourceLang(this)
             val target = Prefs.targetLang(this)
 
             val clusters = withContext(Dispatchers.Default) {
+                if (expectedGeneration != scrollGeneration.get()) return@withContext emptyList()
                 val (blocks, script) = ocr.ocr(bmp, sourcePref)
+                if (expectedGeneration != scrollGeneration.get()) return@withContext emptyList()
                 val detected = ocr.clusterBlocks(blocks)
-                if (detected.isEmpty()) return@withContext emptyList()
+                val visible = detected.filterNot { cluster ->
+                    val bounds = cluster.outerBounds
+                    MangaBalloonClusterer.isNearCaptureEdge(
+                        OcrBox(bounds.left, bounds.top, bounds.right, bounds.bottom),
+                        bmp.width.toFloat(),
+                        bmp.height.toFloat()
+                    )
+                }
+                val edgeClippedCount = detected.size - visible.size
+                if (edgeClippedCount > 0) {
+                    Log.i("Lente", "lock skipped edge-clipped clusters=$edgeClippedCount inset=6px")
+                }
+                if (visible.isEmpty()) return@withContext emptyList()
                 val source = ocr.detectSourceTexts(
-                    detected.map { it.sourceText },
+                    visible.map { it.sourceText },
                     script,
                     sourcePref
                 )
-                val translated = ocr.translateClusters(detected, source, target)
-                translated.forEach {
+                val translated = ocr.translateClusters(visible, source, target)
+                translated.filter { it.translationSucceeded }.forEach {
                     ColorSampler.apply(bmp, it, resources.displayMetrics.density)
-                }
-                synchronized(currentTranslatedTexts) {
-                    currentTranslatedTexts.clear()
-                    for (cluster in translated) {
-                        val tr = cluster.translatedText.trim()
-                        if (!tr.isNullOrEmpty() && tr.length >= 2) {
-                            currentTranslatedTexts.add(tr)
-                        }
-                    }
                 }
                 translated
             }
+            if (expectedGeneration != scrollGeneration.get()) {
+                Log.i(
+                    "Lente",
+                    "lock results dropped stale generation=$expectedGeneration current=${scrollGeneration.get()}"
+                )
+                return
+            }
 
+            val paintable = clusters.filter { it.translationSucceeded && it.translatedText.isNotBlank() }
+            synchronized(currentTranslatedTexts) {
+                currentTranslatedTexts.clear()
+                paintable.forEach { cluster ->
+                    val text = cluster.translatedText.trim()
+                    if (text.length >= 2) currentTranslatedTexts.add(text)
+                }
+            }
             overlay?.setClusters(
                 bmp.width,
                 bmp.height,
-                clusters,
+                paintable,
                 capture.offsetX.toFloat(),
                 capture.offsetY.toFloat()
             )
             overlay?.setHighlights(
                 bmp.width,
                 bmp.height,
-                clusters.map { RectF(it.outerBounds) },
+                paintable.map { RectF(it.outerBounds) },
                 capture.offsetX.toFloat(),
                 capture.offsetY.toFloat()
             )
-            overlay?.setProcessing(false)
+            overlay?.alpha = 1f
             Log.i(
                 "Lente",
-                "lock rendered clusters=${clusters.size} offset=${capture.offsetX},${capture.offsetY}"
+                "lock rendered clusters=${paintable.size} offset=${capture.offsetX},${capture.offsetY}"
             )
         } finally {
-            overlay?.setProcessing(false)
+            if (expectedGeneration == scrollGeneration.get()) {
+                overlay?.setProcessing(false)
+                overlay?.alpha = 1f
+            }
             capturedBitmap?.recycle()
             capturing = false
             val recapture = captureAfterCurrent && lockOn && !paused
@@ -498,7 +541,7 @@ class LensAccessibilityService : AccessibilityService() {
                 scrollJob = scope.launch {
                     val remaining = 950L - (System.currentTimeMillis() - lastCaptureMs)
                     if (remaining > 0) delay(remaining)
-                    captureAndTranslate()
+                    captureAndTranslate(scrollGeneration.get())
                 }
             }
         }

@@ -15,6 +15,7 @@ import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
 import android.util.AttributeSet
+import android.util.Log
 import android.view.View
 import com.androbs.lens.ocr.OcrTranslator
 import kotlin.math.roundToInt
@@ -89,10 +90,15 @@ class TranslationLayerView @JvmOverloads constructor(
         offsetX: Float = 0f,
         offsetY: Float = 0f
     ) {
+        val paintable = clusters.filter {
+            it.translationSucceeded && it.translatedText.isNotBlank()
+        }
+        clusters.filterNot { it.translationSucceeded && it.translatedText.isNotBlank() }
+            .forEach { Log.i("Lente", "inpainting skipped cluster=${it.id} reason=no-translation") }
         setContent(
             sourceWidth,
             sourceHeight,
-            clusters.map { cluster ->
+            paintable.map { cluster ->
                 Box(
                     rect = RectF(cluster.outerBounds),
                     text = cluster.translatedText,

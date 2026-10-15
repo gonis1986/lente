@@ -37,6 +37,11 @@ object MangaBalloonClusterer {
         val elements: List<OcrElement>
     )
 
+    fun isNearCaptureEdge(box: Box, width: Float, height: Float, inset: Float = 6f): Boolean =
+        width <= 0f || height <= 0f || inset < 0f ||
+            box.l <= inset || box.t <= inset ||
+            box.r >= width - inset || box.b >= height - inset
+
     fun cluster(lines: List<OcrLine>): List<ClusteredBalloon> {
         if (lines.isEmpty()) return emptyList()
 

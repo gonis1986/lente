@@ -96,6 +96,18 @@ class MangaBalloonClustererTest {
         assertEquals("本当に大切なものを見つけられるかな。", balloons.single().sourceText)
     }
 
+    @Test
+    fun rejectsClustersWithinSixPixelsOfCaptureEdges() {
+        assertTrue(MangaBalloonClusterer.isNearCaptureEdge(Box(6f, 20f, 30f, 80f), 200f, 300f))
+        assertTrue(MangaBalloonClusterer.isNearCaptureEdge(Box(20f, 20f, 194f, 80f), 200f, 300f))
+        assertTrue(MangaBalloonClusterer.isNearCaptureEdge(Box(20f, 294f, 40f, 299f), 200f, 300f))
+    }
+
+    @Test
+    fun keepsClustersMoreThanSixPixelsFromCaptureEdges() {
+        assertTrue(!MangaBalloonClusterer.isNearCaptureEdge(Box(7f, 7f, 193f, 293f), 200f, 300f))
+    }
+
     private fun vertical(text: String, l: Float, t: Float, r: Float, b: Float) =
         OcrLine(text, Box(l, t, r, b))
 }

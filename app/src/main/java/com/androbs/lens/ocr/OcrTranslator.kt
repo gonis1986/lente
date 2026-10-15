@@ -48,7 +48,8 @@ class OcrTranslator {
         var textColor: Int = Color.BLACK,
         var strokeHaloColor: Int = Color.WHITE,
         val eraseRects: List<RectF> = lineRects,
-        var writingRect: RectF? = null
+        var writingRect: RectF? = null,
+        val translationSucceeded: Boolean = false
     )
 
     private val latin by lazy {
@@ -259,11 +260,12 @@ class OcrTranslator {
         if (sourceLang == targetLang) {
             return clusters.map {
                 Log.i("Lente", "translation path cluster=${it.id} via=source-identical")
-                it.copy(translatedText = it.sourceText)
+                it.copy(translatedText = it.sourceText, translationSucceeded = false)
             }
         }
 
         val translated = arrayOfNulls<String>(clusters.size)
+        val translationSucceeded = BooleanArray(clusters.size)
         val misses = mutableListOf<Int>()
         var cacheHits = 0
         clusters.forEachIndexed { index, cluster ->
@@ -273,6 +275,7 @@ class OcrTranslator {
                 cacheHits++
                 Log.i("Lente", "translation path cluster=${cluster.id} via=cache")
                 translated[index] = cached
+                translationSucceeded[index] = true
             } else {
                 misses += index
             }
@@ -304,6 +307,7 @@ class OcrTranslator {
             if (batch != null && batch.size == chunk.size) {
                 chunk.forEachIndexed { localIndex, clusterIndex ->
                     translated[clusterIndex] = batch[localIndex]
+                    translationSucceeded[clusterIndex] = true
                     putCached(sourceLang, targetLang, clusters[clusterIndex].sourceText, batch[localIndex])
                     Log.i("Lente", "translation path cluster=${clusters[clusterIndex].id} via=batch")
                 }
@@ -321,6 +325,7 @@ class OcrTranslator {
                     } else null
                     val result = online ?: offline ?: original
                     translated[clusterIndex] = result
+                    translationSucceeded[clusterIndex] = online != null || offline != null
                     when {
                         online != null -> {
                             putCached(sourceLang, targetLang, original, online)
@@ -337,7 +342,10 @@ class OcrTranslator {
         }
         Log.i("Lente", "batch requests=$requestCount, cache hits=$cacheHits")
         return clusters.mapIndexed { index, cluster ->
-            cluster.copy(translatedText = translated[index] ?: cluster.sourceText)
+            cluster.copy(
+                translatedText = translated[index] ?: cluster.sourceText,
+                translationSucceeded = translationSucceeded[index]
+            )
         }
     }
 

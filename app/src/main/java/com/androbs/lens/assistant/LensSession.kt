@@ -200,7 +200,11 @@ class LensSession(context: Context) : VoiceInteractionSession(context) {
                             bitmap.height,
                             allClusters.filter { it.translatedText.isNotBlank() }
                         )
-                        translations?.setHighlights(bitmap.width, bitmap.height, allClusters.map { RectF(it.outerBounds) })
+                        translations?.setHighlights(
+                            bitmap.width,
+                            bitmap.height,
+                            allClusters.filter { it.translationSucceeded }.map { RectF(it.outerBounds) }
+                        )
                         translations?.setProcessing(false)
                         modeButton?.setText(R.string.banner_show_original)
                         hint?.setText(R.string.hint_tap_or_drag)
@@ -229,7 +233,7 @@ class LensSession(context: Context) : VoiceInteractionSession(context) {
         source: String
     ): List<OcrTranslator.BalloonCluster> = withContext(Dispatchers.Default) {
         val translated = ocr.translateClusters(clusters, source, Prefs.targetLang(context))
-        translated.forEach {
+        translated.filter { it.translationSucceeded }.forEach {
             ColorSampler.apply(bitmap, it, context.resources.displayMetrics.density)
         }
         translated
@@ -371,7 +375,7 @@ class LensSession(context: Context) : VoiceInteractionSession(context) {
                             translations?.setHighlights(
                                 bitmap.width,
                                 bitmap.height,
-                                allClusters.map { RectF(it.outerBounds) }
+                                allClusters.filter { it.translationSucceeded }.map { RectF(it.outerBounds) }
                             )
                         }
                         showingTranslations = true
@@ -450,7 +454,11 @@ class LensSession(context: Context) : VoiceInteractionSession(context) {
                         bitmap.height,
                         allClusters.filter { it.translatedText.isNotBlank() }
                     )
-                    translations?.setHighlights(bitmap.width, bitmap.height, allClusters.map { RectF(it.outerBounds) })
+                    translations?.setHighlights(
+                        bitmap.width,
+                        bitmap.height,
+                        allClusters.filter { it.translationSucceeded }.map { RectF(it.outerBounds) }
+                    )
                     translations?.setSelection(selectedClusters.map { RectF(it.outerBounds) })
                     translations?.setProcessing(false)
                     modeButton?.setText(R.string.banner_show_original)
