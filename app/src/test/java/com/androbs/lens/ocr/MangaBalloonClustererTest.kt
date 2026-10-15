@@ -1,0 +1,65 @@
+package com.androbs.lens.ocr
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class MangaBalloonClustererTest {
+    @Test
+    fun dropsNarrowFuriganaColumn() {
+        val balloons = MangaBalloonClusterer.cluster(
+            listOf(
+                vertical("漢字", 100f, 100f, 120f, 220f),
+                vertical("ふりがな", 124f, 110f, 132f, 210f),
+                vertical("続く", 100f, 230f, 120f, 320f)
+            )
+        )
+
+        assertEquals(1, balloons.size)
+        assertEquals("漢字続く", balloons.single().sourceText)
+    }
+
+    @Test
+    fun mergesVerticalColumnsAndReadsRightToLeft() {
+        val balloons = MangaBalloonClusterer.cluster(
+            listOf(
+                vertical("左列", 130f, 100f, 150f, 200f),
+                vertical("右列", 160f, 100f, 180f, 200f)
+            )
+        )
+
+        assertEquals(1, balloons.size)
+        assertEquals("右列左列", balloons.single().sourceText)
+        assertTrue(balloons.single().isVertical)
+    }
+
+    @Test
+    fun keepsSeparateVerticalBalloonsSeparate() {
+        val balloons = MangaBalloonClusterer.cluster(
+            listOf(
+                vertical("一", 200f, 100f, 220f, 180f),
+                vertical("二", 140f, 100f, 160f, 180f)
+            )
+        )
+
+        assertEquals(2, balloons.size)
+        assertEquals(listOf("一", "二"), balloons.map { it.sourceText })
+    }
+
+    @Test
+    fun mergesHorizontalLatinLinesTopToBottomWithSpaces() {
+        val balloons = MangaBalloonClusterer.cluster(
+            listOf(
+                OcrLine("second line", Box(20f, 118f, 120f, 130f)),
+                OcrLine("first line", Box(20f, 100f, 120f, 112f))
+            )
+        )
+
+        assertEquals(1, balloons.size)
+        assertEquals("first line second line", balloons.single().sourceText)
+        assertTrue(!balloons.single().isVertical)
+    }
+
+    private fun vertical(text: String, l: Float, t: Float, r: Float, b: Float) =
+        OcrLine(text, Box(l, t, r, b))
+}

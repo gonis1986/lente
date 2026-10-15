@@ -12,14 +12,18 @@ import android.os.Bundle
 import android.provider.Settings
 import android.service.voice.VoiceInteractionSession
 import android.view.View
+import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.view.WindowCompat
 import com.androbs.lens.Prefs
 import com.androbs.lens.R
 import com.androbs.lens.a11y.LensAccessibilityService
+import com.androbs.lens.lens.GoogleLensLauncher
 import com.androbs.lens.ocr.OcrTranslator
+import com.androbs.lens.ui.ColorSampler
 import com.androbs.lens.ui.FitTransform
 import com.androbs.lens.ui.RegionSelectView
 import com.androbs.lens.ui.ScreenshotView
@@ -33,30 +37,18 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.URLEncoder
 
-/**
- * The overlay shown when the user invokes the assistant (long-press Home or
- * corner swipe). Works like Circle to Search: the captured screen is shown
- * dimmed, every detected text block is highlighted with a tappable pill, and
- * the user can tap a word or drag a rectangle to select text — then Search,
- * Copy or Translate it. The banner's Search/Translate act on the selection,
- * or on the whole screen when nothing is selected.
- */
 class LensSession(context: Context) : VoiceInteractionSession(context) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val ocr = OcrTranslator()
-
     private var view: View? = null
     private var pendingBitmap: Bitmap? = null
     private var ocrJob: Job? = null
-
-    /** Every text block found on the captured screen, in bitmap coordinates. */
-    private var allBoxes: List<OcrTranslator.TextBox> = emptyList()
-
-    /** Blocks the user tapped/drag-selected, in bitmap coordinates. */
-    private var selectedBoxes: List<OcrTranslator.TextBox> = emptyList()
+    private var allClusters: List<OcrTranslator.BalloonCluster> = emptyList()
+    private var selectedClusters: List<OcrTranslator.BalloonCluster> = emptyList()
     private var scriptHint = "latin"
     private var ocrDone = false
+    private var showingTranslations = false
 
     private val shotView get() = view?.findViewById<ScreenshotView>(R.id.screenshot)
     private val translations get() = view?.findViewById<TranslationLayerView>(R.id.translations)
@@ -64,6 +56,7 @@ class LensSession(context: Context) : VoiceInteractionSession(context) {
     private val status get() = view?.findViewById<TextView>(R.id.status)
     private val hint get() = view?.findViewById<TextView>(R.id.hint)
     private val resultCard get() = view?.findViewById<LinearLayout>(R.id.resultCard)
+    private val modeButton get() = view?.findViewById<Button>(R.id.btnMode)
 
     override fun onCreate() {
         super.onCreate()
@@ -72,42 +65,52 @@ class LensSession(context: Context) : VoiceInteractionSession(context) {
 
     override fun onShow(args: Bundle?, showFlags: Int) {
         super.onShow(args, showFlags)
-        val v = layoutInflater.inflate(R.layout.session_overlay, null)
-        view = v
-        setContentView(v)
-        getWindow().window?.apply {
-            setLayout(
-                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                android.view.ViewGroup.LayoutParams.MATCH_PARENT
+        val content = layoutInflater.inflate(R.layout.session_overlay, null)
+        view = content
+        setContentView(content)
+        getWindow().window?.let { window ->
+            WindowCompat.setDecorFitsSystemWindows(window, false)
+            window.setFlags(
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+            )
+            window.attributes = window.attributes.apply {
+                layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            }
+            window.setLayout(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT
             )
         }
-        wire(v)
-        pendingBitmap?.let {
-            val b = argb(it)
+        wire(content)
+        pendingBitmap?.let { bitmap ->
             pendingBitmap = null
-            shotView?.setBitmap(b)
-            analyzeScreen(b)
+            val image = argb(bitmap)
+            shotView?.setBitmap(image)
+            analyzeScreen(image)
         }
     }
 
     override fun onHandleScreenshot(bitmap: Bitmap?) {
         super.onHandleScreenshot(bitmap)
         if (bitmap == null) {
-            val v = view ?: return
             pendingBitmap = null
-            v.findViewById<TextView>(R.id.status)?.apply {
+            view?.findViewById<TextView>(R.id.status)?.apply {
                 text = context.getString(R.string.status_no_screenshot)
                 visibility = View.VISIBLE
             }
             return
         }
-        val b = argb(bitmap)
-        val sv = shotView
-        if (sv == null) {
-            pendingBitmap = b
+        val image = argb(bitmap)
+        val screenshot = shotView
+        if (screenshot == null) {
+            pendingBitmap = image
         } else {
-            sv.setBitmap(b)
-            analyzeScreen(b)
+            screenshot.setBitmap(image)
+            analyzeScreen(image)
         }
     }
 
@@ -117,12 +120,11 @@ class LensSession(context: Context) : VoiceInteractionSession(context) {
         insets.touchableInsets = Insets.TOUCHABLE_INSETS_FRAME
     }
 
-    override fun onBackPressed() {
-        finish()
-    }
+    override fun onBackPressed() = finish()
 
     override fun onHide() {
         super.onHide()
+        ocrJob?.cancel()
         view = null
     }
 
@@ -131,74 +133,122 @@ class LensSession(context: Context) : VoiceInteractionSession(context) {
         super.onDestroy()
     }
 
-    private fun argb(b: Bitmap): Bitmap =
-        if (b.config == Bitmap.Config.HARDWARE) {
-            b.copy(Bitmap.Config.ARGB_8888, false) ?: b
-        } else b
+    private fun argb(bitmap: Bitmap): Bitmap =
+        if (bitmap.config == Bitmap.Config.HARDWARE) {
+            bitmap.copy(Bitmap.Config.ARGB_8888, false) ?: bitmap
+        } else bitmap
 
-    private fun wire(v: View) {
-        v.findViewById<Button>(R.id.btnSearch).setOnClickListener { onSearchClicked() }
-        v.findViewById<Button>(R.id.btnTranslate).setOnClickListener { onTranslateClicked() }
-        v.findViewById<Button>(R.id.btnClose).setOnClickListener { finish() }
-        v.findViewById<Button>(R.id.btnLock).setOnClickListener { onLockClicked() }
-        selector?.onSelected = { rect -> onRegionSelected(rect) }
+    private fun wire(content: View) {
+        content.findViewById<Button>(R.id.btnSearch).setOnClickListener { onSearchClicked() }
+        content.findViewById<Button>(R.id.btnTranslate).setOnClickListener { onTranslateClicked() }
+        content.findViewById<Button>(R.id.btnMode).setOnClickListener { toggleDisplayMode() }
+        content.findViewById<Button>(R.id.btnClose).setOnClickListener { finish() }
+        content.findViewById<Button>(R.id.btnLock).setOnClickListener { onLockClicked() }
+        selector?.onSelected = { region -> onRegionSelected(region) }
         selector?.onTap = { x, y -> onTap(x, y) }
-        v.findViewById<Button>(R.id.btnGoogle).setOnClickListener { searchTextOnGoogle() }
-        v.findViewById<Button>(R.id.btnCopy).setOnClickListener { copyResultText() }
-        v.findViewById<Button>(R.id.btnTranslateResult).setOnClickListener { translateSelection() }
+        content.findViewById<Button>(R.id.btnGoogle).setOnClickListener { searchTextOnGoogle() }
+        content.findViewById<Button>(R.id.btnCopy).setOnClickListener { copyResultText() }
+        content.findViewById<Button>(R.id.btnLens).setOnClickListener { openLensForSelection() }
     }
 
     private fun getStringCtx(id: Int) = context.getString(id)
 
-    private fun showStatus(msg: String?, sticky: Boolean = false) {
+    private fun showStatus(message: String?, sticky: Boolean = false) {
         status?.apply {
-            text = msg
-            visibility = if (msg == null) View.GONE else View.VISIBLE
+            text = message
+            visibility = if (message == null) View.GONE else View.VISIBLE
         }
         if (!sticky) {
-            view?.postDelayed({ if (status?.text == msg) status?.visibility = View.GONE }, 4000)
+            view?.postDelayed({ if (status?.text == message) status?.visibility = View.GONE }, 4000)
         }
     }
 
-    /** OCRs the whole captured screen in the background and highlights every block. */
-    private fun analyzeScreen(bmp: Bitmap) {
+    private fun analyzeScreen(bitmap: Bitmap) {
         ocrJob?.cancel()
         ocrDone = false
-        allBoxes = emptyList()
-        selectedBoxes = emptyList()
+        showingTranslations = false
+        allClusters = emptyList()
+        selectedClusters = emptyList()
         selector?.selectionEnabled = true
+        translations?.clearAll()
+        translations?.setProcessing(true)
+        modeButton?.setText(R.string.banner_translate_all)
         hint?.apply {
             setText(R.string.hint_scanning)
             visibility = View.VISIBLE
         }
         ocrJob = scope.launch(Dispatchers.Default) {
             try {
-                val (blocks, script) = ocr.ocr(bmp, Prefs.sourceLang(context))
+                val (blocks, script) = ocr.ocr(bitmap, Prefs.sourceLang(context))
                 scriptHint = script
-                val boxes = blocks.mapNotNull { block ->
-                    val r = block.boundingBox ?: return@mapNotNull null
-                    if (block.text.isBlank()) return@mapNotNull null
-                    OcrTranslator.TextBox(r, block.text.trim(), null)
-                }
-                allBoxes = boxes
+                val detected = ocr.clusterBlocks(blocks)
+                val source = ocr.detectSourceTexts(
+                    detected.map { it.sourceText },
+                    script,
+                    Prefs.sourceLang(context)
+                )
+                allClusters = detected
                 ocrDone = true
-                withContext(Dispatchers.Main) {
-                    translations?.setHighlights(
-                        bmp.width, bmp.height, boxes.map { RectF(it.rect) }
-                    )
-                    hint?.apply {
-                        setText(
-                            if (boxes.isEmpty()) R.string.hint_drag
-                            else R.string.hint_tap_or_drag
+                if (Prefs.autoTranslateOnOpen(context) && detected.isNotEmpty()) {
+                    val translated = translateAndColor(detected, bitmap, source)
+                    allClusters = mergeClusters(allClusters, translated)
+                    withContext(Dispatchers.Main) {
+                        showingTranslations = true
+                        translations?.setClusters(
+                            bitmap.width,
+                            bitmap.height,
+                            allClusters.filter { it.translatedText.isNotBlank() }
                         )
+                        translations?.setHighlights(bitmap.width, bitmap.height, allClusters.map { RectF(it.outerBounds) })
+                        translations?.setProcessing(false)
+                        modeButton?.setText(R.string.banner_show_original)
+                        hint?.setText(R.string.hint_tap_or_drag)
+                    }
+                } else {
+                    withContext(Dispatchers.Main) {
+                        translations?.setHighlights(bitmap.width, bitmap.height, detected.map { RectF(it.outerBounds) })
+                        translations?.setProcessing(false)
+                        modeButton?.setText(R.string.banner_translate_all)
+                        hint?.setText(if (detected.isEmpty()) R.string.hint_drag else R.string.hint_tap_or_drag)
                     }
                 }
-            } catch (e: Exception) {
+            } catch (error: Exception) {
                 withContext(Dispatchers.Main) {
+                    translations?.setProcessing(false)
                     hint?.setText(R.string.hint_drag)
-                    showStatus(context.getString(R.string.status_error, e.message ?: "?"))
+                    showStatus(context.getString(R.string.status_error, error.message ?: "?"))
                 }
             }
+        }
+    }
+
+    private suspend fun translateAndColor(
+        clusters: List<OcrTranslator.BalloonCluster>,
+        bitmap: Bitmap,
+        source: String
+    ): List<OcrTranslator.BalloonCluster> = withContext(Dispatchers.Default) {
+        val translated = ocr.translateClusters(clusters, source, Prefs.targetLang(context))
+        translated.forEach { ColorSampler.apply(bitmap, it) }
+        translated
+    }
+
+    private fun mergeClusters(
+        original: List<OcrTranslator.BalloonCluster>,
+        updates: List<OcrTranslator.BalloonCluster>
+    ): List<OcrTranslator.BalloonCluster> {
+        val byId = updates.associateBy { it.id }
+        return original.map { byId[it.id] ?: it }
+    }
+
+    private fun toggleDisplayMode() {
+        val bitmap = shotView?.bitmap() ?: return
+        if (showingTranslations) {
+            showingTranslations = false
+            translations?.setContent(bitmap.width, bitmap.height, emptyList())
+            translations?.setHighlights(bitmap.width, bitmap.height, allClusters.map { RectF(it.outerBounds) })
+            modeButton?.setText(R.string.banner_translate_all)
+        } else {
+            onTranslateClicked()
         }
     }
 
@@ -208,8 +258,8 @@ class LensSession(context: Context) : VoiceInteractionSession(context) {
             showStatus(getStringCtx(R.string.lock_enable_first), sticky = true)
             try {
                 startAssistantActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-            } catch (e: Exception) {
-                // fall through; user can enable it from the app
+            } catch (_: Exception) {
+                Unit
             }
             return
         }
@@ -219,153 +269,206 @@ class LensSession(context: Context) : VoiceInteractionSession(context) {
     }
 
     private fun viewToBitmap(): android.graphics.Matrix? {
-        val bmp = shotView?.bitmap() ?: return null
-        val sv = shotView ?: return null
-        val m = FitTransform.matrix(sv.width, sv.height, bmp.width, bmp.height)
-        val inv = android.graphics.Matrix()
-        m.invert(inv)
-        return inv
+        val bitmap = shotView?.bitmap() ?: return null
+        val screenshot = shotView ?: return null
+        val matrix = FitTransform.matrix(screenshot.width, screenshot.height, bitmap.width, bitmap.height)
+        val inverse = android.graphics.Matrix()
+        matrix.invert(inverse)
+        return inverse
     }
 
-    /** Tap on the frozen screen: pick the smallest detected block under the finger. */
     private fun onTap(x: Float, y: Float) {
-        val bmp = shotView?.bitmap() ?: return
-        val inv = viewToBitmap() ?: return
-        val pt = floatArrayOf(x, y)
-        inv.mapPoints(pt)
-        val bx = pt[0]
-        val by = pt[1]
-
-        val hit = allBoxes
-            .filter { it.rect.contains(bx.toInt(), by.toInt()) }
-            .minByOrNull { it.rect.width() * it.rect.height() }
-            ?: allBoxes
-                .filter { inflated(it.rect, 24f).contains(bx, by) }
-                .minByOrNull { it.rect.width() * it.rect.height() }
+        val bitmap = shotView?.bitmap() ?: return
+        val screenshot = shotView ?: return
+        val matrix = FitTransform.matrix(screenshot.width, screenshot.height, bitmap.width, bitmap.height)
+        val mappedBounds = allClusters.map { cluster ->
+            cluster to RectF().also { matrix.mapRect(it, cluster.outerBounds) }
+        }
+        val hit = mappedBounds
+            .filter { (_, bounds) -> bounds.contains(x, y) }
+            .minByOrNull { (_, bounds) -> bounds.width() * bounds.height() }
+            ?.first
+            ?: mappedBounds
+                .filter { (_, bounds) -> expanded(bounds, 24f).contains(x, y) }
+                .minByOrNull { (_, bounds) -> bounds.width() * bounds.height() }
+                ?.first
 
         if (hit == null) {
-            // Tapped empty space: clear any selection.
-            selectedBoxes = emptyList()
+            selectedClusters = emptyList()
             translations?.setSelection(emptyList())
             resultCard?.visibility = View.GONE
-            return
+        } else {
+            selectClusters(listOf(hit))
         }
-        selectBoxes(listOf(hit))
     }
 
-    private fun inflated(r: Rect, d: Float) =
-        RectF(r.left - d, r.top - d, r.right + d, r.bottom + d)
+    private fun expanded(rect: RectF, distance: Float) =
+        RectF(rect.left - distance, rect.top - distance, rect.right + distance, rect.bottom + distance)
 
-    /** Drag-select: every detected block intersecting the rect; OCR the crop as fallback. */
     private fun onRegionSelected(viewRect: RectF) {
-        val bmp = shotView?.bitmap() ?: return
-        val inv = viewToBitmap() ?: return
-        val bmpRectF = RectF()
-        inv.mapRect(bmpRectF, viewRect)
-        val r = Rect(
-            maxOf(0, bmpRectF.left.toInt()),
-            maxOf(0, bmpRectF.top.toInt()),
-            minOf(bmp.width, bmpRectF.right.toInt() + 1),
-            minOf(bmp.height, bmpRectF.bottom.toInt() + 1)
+        val bitmap = shotView?.bitmap() ?: return
+        val inverse = viewToBitmap() ?: return
+        val bitmapRect = RectF()
+        inverse.mapRect(bitmapRect, viewRect)
+        val cropRect = Rect(
+            maxOf(0, bitmapRect.left.toInt()),
+            maxOf(0, bitmapRect.top.toInt()),
+            minOf(bitmap.width, bitmapRect.right.toInt() + 1),
+            minOf(bitmap.height, bitmapRect.bottom.toInt() + 1)
         )
-        if (r.width() < 8 || r.height() < 8) return
-
-        val inside = allBoxes.filter { RectF.intersects(RectF(it.rect), bmpRectF) }
-        if (inside.isNotEmpty()) {
-            selectBoxes(inside)
+        if (cropRect.width() < 8 || cropRect.height() < 8) return
+        val selected = allClusters.filter {
+            RectF.intersects(RectF(it.outerBounds), bitmapRect)
+        }
+        if (selected.isNotEmpty()) {
+            selectClusters(selected)
         } else {
-            // Region missed by the full-screen OCR: run OCR on the crop.
-            runOcrFallback(Bitmap.createBitmap(bmp, r.left, r.top, r.width(), r.height()), r)
+            runOcrFallback(
+                Bitmap.createBitmap(bitmap, cropRect.left, cropRect.top, cropRect.width(), cropRect.height()),
+                cropRect
+            )
         }
     }
 
     private fun runOcrFallback(crop: Bitmap, offset: Rect) {
         showStatus(getStringCtx(R.string.status_working), sticky = true)
+        translations?.setProcessing(true)
         scope.launch(Dispatchers.Default) {
             try {
                 val (blocks, script) = ocr.ocr(crop, Prefs.sourceLang(context))
                 if (script == "ja") scriptHint = "ja"
-                val boxes = blocks.mapNotNull { block ->
-                    val r = block.boundingBox ?: return@mapNotNull null
-                    if (block.text.isBlank()) return@mapNotNull null
-                    OcrTranslator.TextBox(
-                        Rect(r).apply { offset(offset.left, offset.top) },
-                        block.text.trim(), null
-                    )
+                val detected = ocr.clusterBlocks(blocks)
+                val source = ocr.detectSourceTexts(
+                    detected.map { it.sourceText },
+                    script,
+                    Prefs.sourceLang(context)
+                )
+                val clusters = translateAndColor(detected, crop, source).map { cluster ->
+                    cluster.outerBounds.offset(offset.left.toFloat(), offset.top.toFloat())
+                    cluster.lineRects.forEach { it.offset(offset.left.toFloat(), offset.top.toFloat()) }
+                    cluster.copy(id = "crop-${offset.left}-${offset.top}-${cluster.id}")
                 }
                 withContext(Dispatchers.Main) {
+                    translations?.setProcessing(false)
                     showStatus(null)
-                    if (boxes.isEmpty()) {
+                    if (clusters.isEmpty()) {
                         showStatus(getStringCtx(R.string.status_no_text))
                     } else {
-                        selectBoxes(boxes)
+                        allClusters = allClusters + clusters
+                        shotView?.bitmap()?.let { bitmap ->
+                            translations?.setClusters(
+                                bitmap.width,
+                                bitmap.height,
+                                allClusters.filter { it.translatedText.isNotBlank() }
+                            )
+                            translations?.setHighlights(
+                                bitmap.width,
+                                bitmap.height,
+                                allClusters.map { RectF(it.outerBounds) }
+                            )
+                        }
+                        showingTranslations = true
+                        modeButton?.setText(R.string.banner_show_original)
+                        selectClusters(clusters)
                     }
                 }
-            } catch (e: Exception) {
+            } catch (error: Exception) {
                 withContext(Dispatchers.Main) {
-                    showStatus(context.getString(R.string.status_error, e.message ?: "?"))
+                    translations?.setProcessing(false)
+                    showStatus(context.getString(R.string.status_error, error.message ?: "?"))
                 }
+            } finally {
+                crop.recycle()
             }
         }
     }
 
-    private fun selectBoxes(boxes: List<OcrTranslator.TextBox>) {
-        selectedBoxes = boxes
-        translations?.setSelection(boxes.map { RectF(it.rect) })
-        showResultCard(joinedText(boxes))
+    private fun selectClusters(clusters: List<OcrTranslator.BalloonCluster>) {
+        selectedClusters = clusters
+        translations?.setSelection(clusters.map { RectF(it.outerBounds) })
+        showResultCard(clusters)
     }
 
-    private fun joinedText(boxes: List<OcrTranslator.TextBox>): String =
-        boxes.joinToString(" ") { it.original }.replace('\n', ' ').trim()
+    private fun joinedOriginal(clusters: List<OcrTranslator.BalloonCluster>) =
+        clusters.joinToString("\n") { it.sourceText }.trim()
 
-    /** Banner "Cerca": search the selected text, or everything on screen. */
+    private fun joinedTranslation(clusters: List<OcrTranslator.BalloonCluster>) =
+        clusters.map { it.translatedText }.filter { it.isNotBlank() }.joinToString("\n").trim()
+
     private fun onSearchClicked() {
-        val text = when {
-            selectedBoxes.isNotEmpty() -> joinedText(selectedBoxes)
-            allBoxes.isNotEmpty() -> joinedText(allBoxes)
-            else -> {
-                if (shotView?.bitmap() == null) {
-                    showStatus(getStringCtx(R.string.status_no_screenshot), sticky = true)
-                } else if (ocrDone) {
-                    showStatus(getStringCtx(R.string.status_no_text))
-                } else {
-                    showStatus(getStringCtx(R.string.status_scanning))
-                }
-                return
-            }
-        }
-        showResultCard(text)
-        openGoogleSearch(text)
-    }
-
-    /** Banner "Traduci": translate the selection, or the whole screen. */
-    private fun onTranslateClicked() {
-        val bmp = shotView?.bitmap()
-        if (bmp == null) {
-            showStatus(getStringCtx(R.string.status_no_screenshot), sticky = true)
-            return
-        }
-        val targets = selectedBoxes.ifEmpty { allBoxes }
+        val targets = selectedClusters.ifEmpty { allClusters }
         if (targets.isEmpty()) {
             showStatus(
                 getStringCtx(
-                    if (ocrDone) R.string.status_no_text else R.string.status_scanning
+                    when {
+                        shotView?.bitmap() == null -> R.string.status_no_screenshot
+                        ocrDone -> R.string.status_no_text
+                        else -> R.string.status_scanning
+                    }
                 )
             )
             return
         }
+        showResultCard(targets)
+        openGoogleSearch(joinedOriginal(targets))
+    }
+
+    private fun onTranslateClicked() {
+        val bitmap = shotView?.bitmap()
+        if (bitmap == null) {
+            showStatus(getStringCtx(R.string.status_no_screenshot), sticky = true)
+            return
+        }
+        val targets = selectedClusters.ifEmpty { allClusters }
+        if (targets.isEmpty()) {
+            showStatus(getStringCtx(if (ocrDone) R.string.status_no_text else R.string.status_scanning))
+            return
+        }
         resultCard?.visibility = View.GONE
+        translations?.setProcessing(true)
         showStatus(getStringCtx(R.string.status_working), sticky = true)
         scope.launch(Dispatchers.Default) {
-            translateAndRender(targets, bmp)
+            try {
+                val source = ocr.detectSourceTexts(
+                    targets.map { it.sourceText },
+                    scriptHint,
+                    Prefs.sourceLang(context)
+                )
+                val translated = translateAndColor(targets, bitmap, source)
+                allClusters = mergeClusters(allClusters, translated)
+                withContext(Dispatchers.Main) {
+                    showingTranslations = true
+                    translations?.setClusters(
+                        bitmap.width,
+                        bitmap.height,
+                        allClusters.filter { it.translatedText.isNotBlank() }
+                    )
+                    translations?.setHighlights(bitmap.width, bitmap.height, allClusters.map { RectF(it.outerBounds) })
+                    translations?.setSelection(selectedClusters.map { RectF(it.outerBounds) })
+                    translations?.setProcessing(false)
+                    modeButton?.setText(R.string.banner_show_original)
+                    showStatus(null)
+                    if (selectedClusters.isNotEmpty()) {
+                        selectedClusters = mergeClusters(selectedClusters, translated)
+                        showResultCard(selectedClusters)
+                    }
+                }
+            } catch (error: Exception) {
+                withContext(Dispatchers.Main) {
+                    translations?.setProcessing(false)
+                    showStatus(context.getString(R.string.status_error, error.message ?: "?"))
+                }
+            }
         }
     }
 
-    private fun showResultCard(text: String) {
+    private fun showResultCard(clusters: List<OcrTranslator.BalloonCluster>) {
         showStatus(null)
         val card = resultCard ?: return
         card.visibility = View.VISIBLE
-        card.findViewById<TextView>(R.id.resultText)?.text = text
+        card.findViewById<TextView>(R.id.resultText).text = joinedOriginal(clusters)
+        card.findViewById<TextView>(R.id.resultTranslation).text =
+            joinedTranslation(clusters).ifBlank { getStringCtx(R.string.result_translation_unavailable) }
     }
 
     private fun searchTextOnGoogle() {
@@ -377,61 +480,28 @@ class LensSession(context: Context) : VoiceInteractionSession(context) {
         val url = "https://www.google.com/search?q=" + URLEncoder.encode(text, "UTF-8")
         try {
             startAssistantActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-        } catch (e: Exception) {
-            showStatus(context.getString(R.string.status_error, e.message ?: "?"))
+        } catch (error: Exception) {
+            showStatus(context.getString(R.string.status_error, error.message ?: "?"))
         }
     }
 
     private fun copyResultText() {
         val text = resultCard?.findViewById<TextView>(R.id.resultText)?.text?.toString() ?: return
-        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        cm.setPrimaryClip(ClipData.newPlainText("lente", text))
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("lente", text))
         showStatus(getStringCtx(R.string.result_copied))
     }
 
-    /** "Translate this text" on the result card: translate the current selection. */
-    private fun translateSelection() {
-        val bmp = shotView?.bitmap() ?: return
-        if (selectedBoxes.isEmpty()) return
-        resultCard?.visibility = View.GONE
-        showStatus(getStringCtx(R.string.status_working), sticky = true)
-        scope.launch(Dispatchers.Default) {
-            translateAndRender(selectedBoxes, bmp)
-        }
-    }
-
-    private suspend fun translateAndRender(
-        boxes: List<OcrTranslator.TextBox>,
-        bmp: Bitmap
-    ) {
-        try {
-            val src = ocr.detectSourceTexts(
-                boxes.map { it.original }, scriptHint, Prefs.sourceLang(context)
-            )
-            val dst = Prefs.targetLang(context)
-            val translated = ocr.translateBoxes(boxes, src, dst)
-            val rendered = translated.mapNotNull { box ->
-                val t = box.translated?.trim() ?: return@mapNotNull null
-                if (t.isEmpty()) return@mapNotNull null
-                TranslationLayerView.Box(
-                    RectF(box.rect), t,
-                    android.graphics.Color.parseColor("#EE111827"),
-                    android.graphics.Color.WHITE
-                )
-            }
-            android.util.Log.i("Lente", "rendered boxes=" + rendered.size)
-            withContext(Dispatchers.Main) {
-                showStatus(null)
-                translations?.setContent(bmp.width, bmp.height, rendered)
-            }
-        } catch (e: Exception) {
-            withContext(Dispatchers.Main) {
-                if (e.message?.contains("model", ignoreCase = true) == true) {
-                    showStatus(getStringCtx(R.string.status_downloading), sticky = true)
-                } else {
-                    showStatus(context.getString(R.string.status_error, e.message ?: "?"))
-                }
-            }
-        }
+    private fun openLensForSelection() {
+        val bitmap = shotView?.bitmap() ?: return
+        val selected = selectedClusters.ifEmpty { allClusters }
+        if (selected.isEmpty()) return
+        val bounds = RectF(selected.first().outerBounds)
+        selected.drop(1).forEach { bounds.union(it.outerBounds) }
+        val left = bounds.left.toInt().coerceIn(0, bitmap.width - 1)
+        val top = bounds.top.toInt().coerceIn(0, bitmap.height - 1)
+        val right = bounds.right.toInt().coerceIn(left + 1, bitmap.width)
+        val bottom = bounds.bottom.toInt().coerceIn(top + 1, bitmap.height)
+        scope.launch { GoogleLensLauncher.launch(context, Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top)) }
     }
 }

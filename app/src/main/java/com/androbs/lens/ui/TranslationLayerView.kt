@@ -1,45 +1,55 @@
 package com.androbs.lens.ui
 
+import android.animation.ValueAnimator
 import android.content.Context
-import android.graphics.Bitmap
+import android.graphics.BlurMaskFilter
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.LinearGradient
+import android.graphics.Matrix
 import android.graphics.Paint
-import android.graphics.Rect
 import android.graphics.RectF
+import android.graphics.Shader
 import android.graphics.Typeface
 import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
 import android.util.AttributeSet
 import android.view.View
-import kotlin.math.max
-import kotlin.math.min
+import com.androbs.lens.ocr.OcrTranslator
+import kotlin.math.roundToInt
 
-/**
- * Draws high-contrast, large, fully readable translation cards directly over text regions.
- * Expands width horizontally so Italian words are never squeezed into tiny unreadable columns.
- */
 class TranslationLayerView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
 ) : View(context, attrs) {
 
-    data class Box(val rect: RectF, val text: String, val bg: Int, val fg: Int)
+    data class Box(
+        val rect: RectF,
+        val text: String,
+        val bg: Int,
+        val fg: Int,
+        val lineRects: List<RectF> = listOf(rect),
+        val halo: Int = bg,
+        val isVertical: Boolean = false,
+        val widenVertically: Boolean = false
+    )
 
     private var boxes: List<Box> = emptyList()
     private var highlights: List<RectF> = emptyList()
     private var selection: List<RectF> = emptyList()
     private var srcW = 0
     private var srcH = 0
+    private var srcOffsetX = 0f
+    private var srcOffsetY = 0f
+    private var shimmer: ValueAnimator? = null
+    private var shimmerX = 0f
 
-    private val cardPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val patchPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
     }
-    private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeWidth = 3f
-        color = Color.parseColor("#4B5563")
+    private val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
     }
     private val highlightPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
@@ -54,23 +64,84 @@ class TranslationLayerView @JvmOverloads constructor(
         strokeWidth = 4f
         color = 0xFF38BDF8.toInt()
     }
+    private val shimmerPaint = Paint(Paint.ANTI_ALIAS_FLAG)
 
-    fun setContent(sourceWidth: Int, sourceHeight: Int, newBoxes: List<Box>) {
+    fun setContent(
+        sourceWidth: Int,
+        sourceHeight: Int,
+        newBoxes: List<Box>,
+        offsetX: Float = 0f,
+        offsetY: Float = 0f
+    ) {
         srcW = sourceWidth
         srcH = sourceHeight
+        srcOffsetX = offsetX
+        srcOffsetY = offsetY
         boxes = newBoxes
         invalidate()
     }
 
-    /** Faint pills over every detected text region (source coordinates). */
-    fun setHighlights(sourceWidth: Int, sourceHeight: Int, rects: List<RectF>) {
+    fun setClusters(
+        sourceWidth: Int,
+        sourceHeight: Int,
+        clusters: List<OcrTranslator.BalloonCluster>,
+        offsetX: Float = 0f,
+        offsetY: Float = 0f
+    ) {
+        setContent(
+            sourceWidth,
+            sourceHeight,
+            clusters.map { cluster ->
+                Box(
+                    RectF(cluster.outerBounds),
+                    cluster.translatedText,
+                    cluster.bgColor,
+                    cluster.textColor,
+                    cluster.lineRects.map { RectF(it) },
+                    cluster.strokeHaloColor,
+                    cluster.isVertical,
+                    cluster.widenVertically
+                )
+            },
+            offsetX,
+            offsetY
+        )
+    }
+
+    fun setProcessing(processing: Boolean) {
+        if (processing) {
+            if (shimmer?.isRunning == true) return
+            shimmer = ValueAnimator.ofFloat(-width.toFloat(), width * 2f).apply {
+                duration = 950
+                repeatCount = ValueAnimator.INFINITE
+                addUpdateListener {
+                    shimmerX = it.animatedValue as Float
+                    invalidate()
+                }
+                start()
+            }
+        } else {
+            shimmer?.cancel()
+            shimmer = null
+            invalidate()
+        }
+    }
+
+    fun setHighlights(
+        sourceWidth: Int,
+        sourceHeight: Int,
+        rects: List<RectF>,
+        offsetX: Float = 0f,
+        offsetY: Float = 0f
+    ) {
         srcW = sourceWidth
         srcH = sourceHeight
+        srcOffsetX = offsetX
+        srcOffsetY = offsetY
         highlights = rects
         invalidate()
     }
 
-    /** Strong pills over the currently selected regions (source coordinates). */
     fun setSelection(rects: List<RectF>) {
         selection = rects
         invalidate()
@@ -78,6 +149,7 @@ class TranslationLayerView @JvmOverloads constructor(
 
     fun clear() {
         boxes = emptyList()
+        setProcessing(false)
         invalidate()
     }
 
@@ -85,102 +157,139 @@ class TranslationLayerView @JvmOverloads constructor(
         boxes = emptyList()
         highlights = emptyList()
         selection = emptyList()
+        setProcessing(false)
         invalidate()
     }
 
     override fun onDraw(canvas: Canvas) {
         if (srcW <= 0 || srcH <= 0) return
-        val m = FitTransform.matrix(width, height, srcW, srcH)
-        val dst = RectF()
-
-        for (r in highlights) {
-            m.mapRect(dst, r)
-            dst.inset(-4f, -2f)
-            canvas.drawRoundRect(dst, 10f, 10f, highlightPaint)
-        }
-        for (r in selection) {
-            m.mapRect(dst, r)
-            dst.inset(-6f, -4f)
-            canvas.drawRoundRect(dst, 12f, 12f, selectionFillPaint)
-            canvas.drawRoundRect(dst, 12f, 12f, selectionStrokePaint)
-        }
-
-        for (box in boxes) {
-            m.mapRect(dst, box.rect)
-
-            // Make sure width is at least 320px (or screen width - margin) for readable Italian words
-            val minCardWidth = min(width * 0.85f, max(dst.width(), 340f))
-            val cx = dst.centerX()
-            var left = cx - minCardWidth / 2f
-            var right = cx + minCardWidth / 2f
-
-            // Clamp inside screen bounds
-            if (left < 16f) {
-                right += (16f - left)
-                left = 16f
+        val matrix = if (srcOffsetX != 0f || srcOffsetY != 0f) {
+            val scale = minOf(width.toFloat() / srcW, height.toFloat() / srcH)
+            Matrix().apply {
+                setScale(scale, scale)
+                postTranslate(srcOffsetX, srcOffsetY)
             }
-            if (right > width - 16f) {
-                left -= (right - (width - 16f))
-                right = width - 16f
-            }
-            if (left < 16f) left = 16f
-
-            val cardRect = RectF(left, dst.top, right, dst.bottom)
-            drawReadableCard(canvas, cardRect, box.text, box.bg, box.fg)
+        } else {
+            FitTransform.matrix(width, height, srcW, srcH)
         }
+        val mapped = RectF()
+
+        highlights.forEach { rect ->
+            matrix.mapRect(mapped, rect)
+            mapped.inset(-4f, -2f)
+            canvas.drawRoundRect(mapped, 10f, 10f, highlightPaint)
+        }
+        selection.forEach { rect ->
+            matrix.mapRect(mapped, rect)
+            mapped.inset(-6f, -4f)
+            canvas.drawRoundRect(mapped, 12f, 12f, selectionFillPaint)
+            canvas.drawRoundRect(mapped, 12f, 12f, selectionStrokePaint)
+        }
+
+        boxes.forEach { box ->
+            val lines = box.lineRects.map { line ->
+                RectF().also { matrix.mapRect(it, line) }
+            }
+            drawInpainting(canvas, lines, box.bg, box.isVertical)
+            matrix.mapRect(mapped, box.rect)
+            val target = RectF(mapped)
+            if (box.isVertical && box.widenVertically) {
+                val extra = target.width() * 0.2f
+                target.left = (target.left - extra * 0.5f).coerceAtLeast(8f)
+                target.right = (target.right + extra * 0.5f).coerceAtMost(width - 8f)
+            }
+            target.inset(dp(2f), dp(2f))
+            drawAdaptiveText(canvas, target, box.text, box.fg, box.halo)
+        }
+        drawShimmer(canvas)
     }
 
-    private fun drawReadableCard(canvas: Canvas, rect: RectF, text: String, bg: Int, fg: Int) {
-        val hPad = 14f
-        val vPad = 10f
-        val availW = (rect.width() - hPad * 2).toInt()
-        if (availW <= 30) return
-
-        val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
-            typeface = Typeface.DEFAULT_BOLD
-            setShadowLayer(4f, 0f, 2f, Color.BLACK)
-        }
-
-        // Start with a large, comfortable font size (24sp equivalent down to 16sp minimum)
-        var fontSize = 34f
-        var layout: StaticLayout? = null
-
-        while (fontSize >= 20f) {
-            textPaint.textSize = fontSize
-            val testLayout = StaticLayout.Builder
-                .obtain(text, 0, text.length, textPaint, availW)
-                .setAlignment(Layout.Alignment.ALIGN_CENTER)
-                .setIncludePad(false)
-                .build()
-
-            layout = testLayout
-            if (testLayout.lineCount <= 4) {
-                break
+    private fun drawInpainting(canvas: Canvas, lines: List<RectF>, color: Int, vertical: Boolean) {
+        val expansion = dp(3.5f)
+        val patches = lines.map { RectF(it).apply { inset(-expansion, -expansion) } }.toMutableList()
+        if (vertical) {
+            for (i in lines.indices) {
+                for (j in i + 1 until lines.size) {
+                    val first = lines[i]
+                    val second = lines[j]
+                    val overlapTop = maxOf(first.top, second.top)
+                    val overlapBottom = minOf(first.bottom, second.bottom)
+                    val gapLeft = minOf(first.right, second.right)
+                    val gapRight = maxOf(first.left, second.left)
+                    if (overlapBottom > overlapTop && gapRight > gapLeft && gapRight - gapLeft < dp(72f)) {
+                        patches += RectF(gapLeft, overlapTop, gapRight, overlapBottom)
+                    }
+                }
             }
-            fontSize -= 2f
         }
+        patchPaint.color = color
+        patchPaint.maskFilter = BlurMaskFilter(dp(3.5f), BlurMaskFilter.Blur.NORMAL)
+        patches.forEach { canvas.drawRoundRect(it, dp(8f), dp(8f), patchPaint) }
+        patchPaint.maskFilter = null
+        patches.forEach { canvas.drawRoundRect(it, dp(8f), dp(8f), patchPaint) }
+    }
 
-        val finalLayout = layout ?: return
-        val totalH = max(rect.height(), finalLayout.height + vPad * 2)
-        val finalCardRect = RectF(rect.left, rect.top, rect.right, rect.top + totalH)
-
-        // Draw solid dark rounded background with high contrast
-        cardPaint.color = Color.parseColor("#EE111827")
-        canvas.drawRoundRect(finalCardRect, 14f, 14f, cardPaint)
-        canvas.drawRoundRect(finalCardRect, 14f, 14f, borderPaint)
-
-        // Draw centered bold text
+    private fun drawAdaptiveText(canvas: Canvas, rect: RectF, text: String, color: Int, halo: Int) {
+        val availableWidth = rect.width().roundToInt()
+        if (availableWidth <= 1 || rect.height() <= 1f || text.isBlank()) return
+        var low = 8.5f * resources.displayMetrics.scaledDensity
+        var high = 26f * resources.displayMetrics.scaledDensity
+        var best: StaticLayout? = null
+        repeat(14) {
+            val size = (low + high) / 2f
+            textPaint.textSize = size
+            val layout = buildLayout(text, availableWidth)
+            if (layout.height <= rect.height() && layout.getLineEnd(layout.lineCount - 1) >= text.length) {
+                best = layout
+                low = size
+            } else {
+                high = size
+            }
+        }
+        if (best == null) {
+            textPaint.textSize = 8.5f * resources.displayMetrics.scaledDensity
+            best = buildLayout(text, availableWidth)
+        }
+        val layout = best ?: return
         canvas.save()
-        val textY = finalCardRect.top + (finalCardRect.height() - finalLayout.height) / 2f
-        canvas.translate(finalCardRect.left + hPad, textY)
-        finalLayout.draw(canvas)
+        canvas.translate(rect.left, rect.top + (rect.height() - layout.height) / 2f)
+        textPaint.style = Paint.Style.STROKE
+        textPaint.strokeWidth = dp(3.5f)
+        textPaint.strokeJoin = Paint.Join.ROUND
+        textPaint.color = halo
+        layout.draw(canvas)
+        textPaint.style = Paint.Style.FILL
+        textPaint.color = color
+        layout.draw(canvas)
         canvas.restore()
     }
 
-    companion object {
-        fun estimateColors(bitmap: Bitmap, rect: Rect): Pair<Int, Int> {
-            return Color.parseColor("#EE111827") to Color.WHITE
-        }
+    private fun buildLayout(text: String, width: Int): StaticLayout =
+        StaticLayout.Builder.obtain(text, 0, text.length, textPaint, width)
+            .setAlignment(Layout.Alignment.ALIGN_CENTER)
+            .setLineSpacing(0f, 0.92f)
+            .setIncludePad(false)
+            .build()
+
+    private fun drawShimmer(canvas: Canvas) {
+        if (shimmer?.isRunning != true) return
+        shimmerPaint.shader = LinearGradient(
+            shimmerX,
+            0f,
+            shimmerX + width * 0.55f,
+            height.toFloat(),
+            intArrayOf(Color.TRANSPARENT, 0x2238BDF8, Color.TRANSPARENT),
+            null,
+            Shader.TileMode.CLAMP
+        )
+        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), shimmerPaint)
+    }
+
+    private fun dp(value: Float): Float = value * resources.displayMetrics.density
+
+    override fun onDetachedFromWindow() {
+        shimmer?.cancel()
+        shimmer = null
+        super.onDetachedFromWindow()
     }
 }

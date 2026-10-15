@@ -3,7 +3,6 @@ package com.androbs.lens.ui
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.graphics.Paint
 import android.util.AttributeSet
 import android.view.View
 
@@ -14,8 +13,6 @@ class ScreenshotView @JvmOverloads constructor(
 ) : View(context, attrs) {
 
     private var bitmap: Bitmap? = null
-    private val dim = Paint().apply { color = 0x55000000 }
-
     fun setBitmap(b: Bitmap?) {
         bitmap = b
         invalidate()
@@ -27,6 +24,5 @@ class ScreenshotView @JvmOverloads constructor(
         val b = bitmap ?: return
         val m = FitTransform.matrix(width, height, b.width, b.height)
         canvas.drawBitmap(b, m, null)
-        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), dim)
     }
 }

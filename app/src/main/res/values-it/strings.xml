@@ -34,4 +34,16 @@
     <string name="lock_pause">Pausa</string>
     <string name="lock_resume">Riprendi</string>
     <string name="lock_stop">Stop</string>
+    <string name="auto_translate_on_open">Traduci automaticamente all\'apertura</string>
+    <string name="banner_show_original">Mostra originale</string>
+    <string name="banner_translate_all">Traduci tutto</string>
+    <string name="result_open_lens">Apri in Google Lens</string>
+    <string name="result_translation_unavailable">Traduzione non disponibile</string>
+    <string name="result_original_label">Originale</string>
+    <string name="result_translated_label">Traduzione</string>
+    <string name="open_google_lens">Apri con Google Lens</string>
+    <string name="error_google_lens">Impossibile aprire Google Lens: %1$s</string>
+    <string name="controller_lens">Apri Google Lens</string>
+    <string name="controller_translate">Traduci schermata</string>
+    <string name="controller_reader">Apri il lettore di traduzione</string>
 </resources>

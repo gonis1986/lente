@@ -14,6 +14,7 @@ import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import com.google.android.material.switchmaterial.SwitchMaterial
 import com.androbs.lens.a11y.LensAccessibilityService
 import java.util.Locale
 
@@ -69,6 +70,13 @@ class MainActivity : AppCompatActivity() {
         setupSpinner(
             findViewById(R.id.spinnerTarget), targetTags, Prefs.targetLang(this)
         ) { tag -> Prefs.setTargetLang(this, tag) }
+
+        findViewById<SwitchMaterial>(R.id.switchAutoTranslate).apply {
+            isChecked = Prefs.autoTranslateOnOpen(this@MainActivity)
+            setOnCheckedChangeListener { _, checked ->
+                Prefs.setAutoTranslateOnOpen(this@MainActivity, checked)
+            }
+        }
     }
 
     override fun onResume() {

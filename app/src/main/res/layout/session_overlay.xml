@@ -32,11 +32,37 @@
         android:visibility="gone">
 
         <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/result_original_label"
+            android:textColor="#94A3B8"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+        <TextView
             android:id="@+id/resultText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:maxLines="6"
             android:textColor="#FFFFFF"
+            android:textSize="15sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="@string/result_translated_label"
+            android:textColor="#94A3B8"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/resultTranslation"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:maxLines="6"
+            android:textColor="#CBD5E1"
             android:textSize="15sp" />
 
         <LinearLayout
@@ -62,11 +88,11 @@
                 android:textSize="12sp" />
 
             <Button
-                android:id="@+id/btnTranslateResult"
+                android:id="@+id/btnLens"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="@string/result_translate_it"
+                android:text="@string/result_open_lens"
                 android:textSize="12sp" />
         </LinearLayout>
     </LinearLayout>
@@ -122,6 +148,14 @@
             android:layout_weight="1"
             android:text="@string/banner_translate"
             android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/btnMode"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1.2"
+            android:text="@string/banner_show_original"
+            android:textSize="10sp" />
 
         <Button
             android:id="@+id/btnLock"
